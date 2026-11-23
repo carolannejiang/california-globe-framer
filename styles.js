@@ -20,8 +20,9 @@
 // sheen       diagonal light across the globe, brightest top-left: { color, alpha } or null
 // dots        dot-matrix land, dots grow where NASA night lights are bright (western hemisphere only):
 //               { color, alpha, size (px), spacing (km between dots), lights (0 = uniform dots, 1 = full city boost) } or null
-// ribbons     bands of fine lines that hug the horizon like stylised atmosphere layers, twisting as they travel along it:
-//               { color, alpha, density (lines per band), overGlobe (0–1 strength over the globe vs. space) } or null
+// horizonLines  many fine lines parallel to the horizon that condense and spread apart, like stylised atmosphere:
+//               { color, alpha, count (number of lines), extent (how far above the horizon, in frame heights),
+//                 overGlobe (0–1 strength over the globe vs. space) } or null
 // shells      stepped translucent layers above the horizon, each with a hairline edge, like overlapping glass rings:
 //               { color, alpha (fill of the innermost layer; 0 = edges only), count, spacing (fraction of frame height), edge (hairline strength) } or null
 // pattern     faint interlaced-circle lattice over the whole frame: { color, alpha, scale (circles per frame height) } or null
@@ -43,7 +44,7 @@ window.DEFAULT_STYLE = {
   limb: null,
   sheen: null,
   dots: null,
-  ribbons: null,
+  horizonLines: null,
   shells: null,
   pattern: null,
   paper: null,
@@ -116,15 +117,15 @@ window.GLOBE_STYLES = {
   },
 
   // After a cornflower-blue research-report cover: flat periwinkle, dot-matrix texture,
-  // twisting ribbons of hairlines wrapped around the horizon.
+  // a field of hairlines following the horizon, condensing and spreading like the cover's moiré.
   halftone: {
-    name: 'Halftone ribbons',
+    name: 'Halftone',
     globeColor: '#3a56a4',
     background: ['#4867b6', '#3f5dab'],
     outline: { color: 'rgba(240,242,255,1)', width: 2, glow: 0 },
     borders: { color: 'rgba(214,220,250,0.3)', width: 1 },
     dots: { color: '#cfd5f5', alpha: 0.5, size: 1.5, spacing: 14, lights: 0.6 },
-    ribbons: { color: '#dfe3fb', alpha: 0.55, density: 22, overGlobe: 0 },
+    horizonLines: { color: '#dfe3fb', alpha: 0.5, count: 130, extent: 0.5, overGlobe: 0 },
     limb: { color: 'rgba(225,230,255,0.8)', width: 1 },
   },
 };

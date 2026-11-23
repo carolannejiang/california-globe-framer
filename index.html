@@ -276,7 +276,7 @@ function setLines(key, sets, spec) {
   linePrims[key] = scene.primitives.add(col);
 }
 
-// Screen-space effects: gradient sky, sheen, horizon shells and ribbons, pattern, paper, vignette,
+// Screen-space effects: gradient sky, sheen, horizon shells and lines, pattern, paper, vignette,
 // line + halo along the globe's edge, and grain
 const earthEye = new C.Cartesian3();
 const fx = scene.postProcessStages.add(new C.PostProcessStage({
@@ -292,9 +292,10 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
     uniform vec4 bgTop;
     uniform vec4 bgBottom;
     uniform vec4 sheenColor;
-    uniform vec4 ribbonColor;
-    uniform float ribbonDensity;
-    uniform float ribbonOverGlobe;
+    uniform vec4 lineColor;
+    uniform float lineCount;
+    uniform float lineExtent;
+    uniform float lineOverGlobe;
     uniform vec4 shellColor;
     uniform float shellCount;
     uniform float shellSpacing;
@@ -331,17 +332,19 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
       return vec2(theta * sin(limb) * k, (beta - limb) * k);
     }
 
-    // A band of fine lines running along the horizon; its width pinches and swells so the
-    // lines bunch together like a twisting ribbon.
-    float ribbon(vec2 p, float base, float amp, float f, float ph, float w, float g, float q) {
-      float c = base + amp * sin(6.2831853 * (f * p.x + ph));
-      float hw = w * (0.12 + 0.88 * abs(sin(6.2831853 * (g * p.x + q))));
-      float v = (p.y - c) / hw;
-      float lineCoord = v * ribbonDensity;
+    // Fine lines running parallel to the horizon. Their spacing is warped with height so lines
+    // condense and spread apart, and the warp drifts slowly along the arc. The warp's slope never
+    // drops to zero, so lines never cross or twist.
+    float horizonLines(vec2 p) {
+      float u = p.y / lineExtent;  // 0 at the limb, 1 at the top of the field
+      float w = u + 0.045 * sin(6.2831853 * (2.0 * u + 0.2 * p.x + 0.1))
+                  + 0.008 * sin(6.2831853 * (5.0 * u - 0.3 * p.x + 0.4));
+      float lineCoord = w * lineCount;
       float fw = fwidth(lineCoord) * max(1.0, czm_pixelRatio * 0.5);
       float line = 1.0 - smoothstep(0.0, fw, abs(fract(lineCoord + 0.5) - 0.5));
       line = mix(line, 0.45, smoothstep(0.15, 0.45, fw)); // where lines merge, use average coverage (avoids moiré)
-      return line * step(abs(v), 1.0) * (1.0 - v * v);
+      float uc = clamp(u, 0.0, 1.0);
+      return line * step(0.0, u) * step(u, 1.0) * pow(1.0 - uc, 1.2);
     }
 
     float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -378,7 +381,7 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
         float pat = max(hairline(r1) * step(r1, 1.5), hairline(r2) * step(r2, 1.5));
         c.rgb = mix(c.rgb, patternColor.rgb, pat * patternColor.a);
       }
-      if (shellCount > 0.0 || ribbonColor.a > 0.0) {
+      if (shellCount > 0.0 || lineColor.a > 0.0) {
         vec2 hp = horizonCoords(uv);
         if (shellCount > 0.0) {
           // Stepped translucent layers above the horizon; spacing drifts along the arc so the
@@ -391,12 +394,9 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
             c.rgb = mix(c.rgb, shellColor.rgb, edge * shellEdge);
           }
         }
-        if (ribbonColor.a > 0.0) {
-          float r = ribbon(hp, 0.060, 0.015, 1.2, 0.10, 0.050, 1.4, 0.20)
-                  + ribbon(hp, 0.170, 0.035, 0.8, 0.55, 0.080, 0.9, 0.70)
-                  + ribbon(hp, 0.320, 0.050, 0.5, 0.30, 0.110, 0.6, 0.45);
-          float a = clamp(r, 0.0, 1.0) * ribbonColor.a * exp(-max(hp.y, 0.0) / 0.3) * mix(ribbonOverGlobe, 1.0, self);
-          c.rgb = mix(c.rgb, ribbonColor.rgb, a);
+        if (lineColor.a > 0.0) {
+          float a = horizonLines(hp) * lineColor.a * mix(lineOverGlobe, 1.0, self);
+          c.rgb = mix(c.rgb, lineColor.rgb, a);
         }
       }
       if (limbGlow > 0.0 && self > 0.0) {
@@ -434,8 +434,8 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
       return new C.Cartesian2(t * camera.frustum.aspectRatio, t);
     },
     limbColor: C.Color.WHITE, limbWidth: 0, limbGlow: 0, bgGradient: 0, bgTop: C.Color.BLACK,
-    bgBottom: C.Color.BLACK, sheenColor: C.Color.TRANSPARENT, ribbonColor: C.Color.TRANSPARENT,
-    ribbonDensity: 40, ribbonOverGlobe: 0, shellColor: C.Color.TRANSPARENT, shellCount: 0, shellSpacing: 0.05,
+    bgBottom: C.Color.BLACK, sheenColor: C.Color.TRANSPARENT, lineColor: C.Color.TRANSPARENT,
+    lineCount: 130, lineExtent: 0.5, lineOverGlobe: 0, shellColor: C.Color.TRANSPARENT, shellCount: 0, shellSpacing: 0.05,
     shellEdge: 0, patternColor: C.Color.TRANSPARENT, patternScale: 6, paper: 0, paperScale: 4, vignette: 0, grain: 0,
   },
 }));
@@ -467,10 +467,11 @@ function applyStyle(key) {
   fx.uniforms.bgTop = css(bg[0]);
   fx.uniforms.bgBottom = css(bg[bg.length - 1]);
   fx.uniforms.sheenColor = style.sheen ? css(style.sheen.color).withAlpha(style.sheen.alpha) : C.Color.TRANSPARENT;
-  const rb = style.ribbons;
-  fx.uniforms.ribbonColor = rb ? css(rb.color).withAlpha(rb.alpha) : C.Color.TRANSPARENT;
-  fx.uniforms.ribbonDensity = rb?.density ?? 40;
-  fx.uniforms.ribbonOverGlobe = rb?.overGlobe ?? 0;
+  const hl = style.horizonLines;
+  fx.uniforms.lineColor = hl ? css(hl.color).withAlpha(hl.alpha) : C.Color.TRANSPARENT;
+  fx.uniforms.lineCount = hl?.count ?? 130;
+  fx.uniforms.lineExtent = hl?.extent ?? 0.5;
+  fx.uniforms.lineOverGlobe = hl?.overGlobe ?? 0;
   const sh = style.shells;
   fx.uniforms.shellCount = sh?.count ?? 0;
   fx.uniforms.shellColor = sh ? css(sh.color).withAlpha(sh.alpha) : C.Color.TRANSPARENT;
