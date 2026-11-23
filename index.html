@@ -185,7 +185,7 @@ const dataReady = Promise.all([
   caPolys = polys;
 });
 
-// Dot-matrix land: a staggered grid of dots over land, larger where NASA night lights are bright.
+// Dot-matrix land: dots over land on a lat/long lattice, larger where NASA night lights are bright.
 // Land and lights are rasterised once into equirectangular grids covering this region.
 const REGION = { w: -175, e: -45, s: 5, n: 80, res: 0.05 };
 const RW = Math.round((REGION.e - REGION.w) / REGION.res), RH = Math.round((REGION.n - REGION.s) / REGION.res);
@@ -243,13 +243,16 @@ async function setDots(spec) {
   const col = new C.PointPrimitiveCollection();
   const base = css(spec.color);
   const scale = new C.NearFarScalar(3e5, 1.6, 6e6, 0.35);
-  // California gets its own grid at `spacing`; other land uses `outsideSpacing` (sparser = darker tone)
+  // California gets its own grid at `spacing`; other land uses `outsideSpacing` (sparser = darker tone).
+  // Dots sit in rows along parallels and columns along meridians, each a whole fraction of a degree, so
+  // every lat/long grid line runs exactly through a row or column of dots and they converge together.
+  // Cells are square at California's latitude.
   const addGrid = (spacingKm, inCalifornia, lights, size, alpha) => {
-    const dLat = spacingKm / 111.2;
-    let row = 0;
-    for (let lat = REGION.s; lat < REGION.n; lat += dLat, row++) {
-      const dLon = dLat / Math.cos(rad(lat));
-      for (let lon = REGION.w + (row % 2) * dLon / 2; lon < REGION.e; lon += dLon) {
+    const perLat = Math.max(1, Math.round(111.2 / spacingKm)), perLon = Math.max(1, Math.round(111.2 * Math.cos(rad(37)) / spacingKm));
+    for (let r = Math.ceil(REGION.s * perLat); r < REGION.n * perLat; r++) {
+      const lat = r / perLat;
+      for (let c = Math.ceil(REGION.w * perLon); c < REGION.e * perLon; c++) {
+        const lon = c / perLon;
         const x = Math.floor((lon - REGION.w) / REGION.res), y = Math.floor((REGION.n - lat) / REGION.res);
         const cell = y * RW + x;
         if (!landMask[cell] || !!caMask[cell] !== inCalifornia) continue;

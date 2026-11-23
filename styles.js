@@ -25,9 +25,9 @@
 // mask        tint over everything outside California: { color, alpha }
 // limb        line drawn along the edge of the globe: { color, width, glow (soft halo radius in px, 0 = none) } or null
 // sheen       diagonal light across the globe, brightest top-left: { color, alpha } or null
-// dots        dot-matrix land, dots grow where NASA night lights are bright (western hemisphere only):
+// dots        dot-matrix land on a lat/long lattice that lines up with the grid; dots grow where NASA night lights are bright (western hemisphere only):
 //               { color, alpha, size (px) — both for California; outsideAlpha, outsideSize for other land (default to alpha, size),
-//                 spacing (km between dots in California), outsideSpacing (km between dots elsewhere;
+//                 spacing (≈km between dots in California, rounded so a whole number of dots fits in each degree), outsideSpacing (km between dots elsewhere;
 //                 larger = sparser, darker land around a brighter California), lights (how much bright cities enlarge dots in California: 0 = uniform dots),
 //                 outsideLights (the same for other land; defaults to lights) } or null
 // horizonLines  fine lines exactly parallel to the horizon, tightest at the horizon and widening outward
