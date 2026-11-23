@@ -8,6 +8,8 @@ Frame an oblique, from-orbit view of California on a 3D globe and export it at p
 - Switchable render styles (Night lights, Daylight, Blueprint, Ultramarine, Halftone), defined in [`styles.js`](styles.js). Add a style by copying an entry there; the file documents every option.
 - Each style shows its own sliders (map, glow, linework, dots, horizon lines, texture). Adjustments are saved in your browser and survive reloads and new versions. "Copy settings" copies your tuned values in `styles.js` format; "Reset style" restores the defaults.
 - Frame: pick a page ratio or type any W : H. "Frame size" widens or tightens the crop from the same camera, so perspective is unchanged; "Fit whole globe" finds the size that shows the entire globe (backing the camera away along its line of sight when part of the globe would be behind it).
+- Book wrap: adds a spine and back cover beside the front. The front stays exactly as framed and the same view carries on across the spine, so the globe reads as one image over the whole jacket; export gives the full spread.
+- Move the view centre anywhere with the Target sliders, Shift-drag, or the "Drag moves the view centre" option.
 - Export PNG at any height (3300 px = 8.5 × 11 in at 300 dpi).
 - "Copy Google Earth view" puts a KML camera on the clipboard; paste it into Google Earth Pro's Places panel to fly to the same view.
 
