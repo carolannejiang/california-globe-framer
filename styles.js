@@ -33,6 +33,8 @@
 //               { color, alpha, count (number of lines), extent (how far above the horizon the last line sits, in frame heights),
 //                 growth (last gap ÷ first gap, e.g. 10), overGlobe (0–1 strength over the globe vs. space),
 //                 glow (0–3 extra brightness at the horizon), glowHeight (how far up the glow fades out, in frame heights) } or null
+// oceanTexture, landTexture   relief/bathymetry shading as darkness only (no colour), each
+//               { strength (0–1), contrast (1 = normal) } or null. Switch on in any style under Layers.
 // shells      stepped translucent layers above the horizon, each with a hairline edge, like overlapping glass rings:
 //               { color, alpha (fill of the innermost layer; 0 = edges only), count, spacing (fraction of frame height), edge (hairline strength),
 //                 glow (0–3 extra light in the layers nearest the horizon), glowHeight (how far up the glow fades out, in frame heights) } or null
@@ -60,6 +62,8 @@ window.DEFAULT_STYLE = {
   limb: null,
   sheen: null,
   dots: null,
+  oceanTexture: null,
+  landTexture: null,
   horizonLines: null,
   shells: null,
   pattern: null,

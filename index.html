@@ -73,7 +73,6 @@
       <select id="style" style="grid-column: span 2"></select>
     </label>
     <label class="check"><input type="checkbox" id="outline" checked> California outline</label>
-    <label class="check" id="gridToggle"><input type="checkbox" id="grid"> Lat/long grid</label>
     <div id="lookSliders"></div>
     <div class="btns" style="margin-top:8px">
       <button id="resetStyle">Reset style</button>
@@ -471,10 +470,8 @@ let styleKey;
 function applyStyle(key) {
   styleKey = key;
   style = structuredClone({ ...DEFAULT_STYLE, ...GLOBE_STYLES[key] });
-  renderFx(); renderLines(); renderDots(); renderFills();
+  renderFx(); renderLines(); renderDots(); renderFills(); renderTextures();
   buildStyleControls();
-  document.getElementById('gridToggle').style.display = style.graticule ? '' : 'none';
-  document.getElementById('grid').checked = style.showGrid;
 }
 
 // Cheap, instant settings: imagery, colours, shader uniforms, outline, glow
@@ -494,6 +491,7 @@ function renderFx() {
   reliefLayer.show = (im?.relief ?? 0) > 0;
   reliefLayer.alpha = im?.relief ?? 0;
   scene.globe.maximumScreenSpaceError = 2 / (style.detail ?? 1);
+  for (const w of ['ocean', 'land']) if (textureLayers[w] && style[w + 'Texture']) textureLayers[w].alpha = style[w + 'Texture'].strength ?? 0.5;
   maskColor = css(style.mask.color);
 
   scene.globe.baseColor = style.fills ? tone(style.fills.ocean, style.fills.oceanTone) : css(style.globeColor);
@@ -602,6 +600,71 @@ async function renderFills() {
   const old = fillLayer;
   fillLayer = layer;
   if (old) setTimeout(() => viewer.imageryLayers.remove(old), 400); // swap after the new image is up, so it doesn't flash
+  for (const t of Object.values(textureLayers)) if (t) viewer.imageryLayers.raiseToTop(t); // textures stay above the fills
+}
+
+// Ocean and land textures (style.oceanTexture / style.landTexture): the shading of NASA's Blue Marble
+// relief + bathymetry, turned into darkness only. Each surface is normalised on its own, then pixels
+// darker than that surface's average become translucent black and lighter ones translucent white,
+// so the texture shifts tone without bringing in NASA's colours.
+let terrainGray = null;
+const textureLayers = { ocean: null, land: null }, textureStats = {};
+let textureToken = 0;
+async function loadTerrain() {
+  const url = 'https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.3.0'
+    + `&LAYERS=BlueMarble_ShadedRelief_Bathymetry&STYLES=&CRS=EPSG:4326&BBOX=${REGION.s},${REGION.w},${REGION.n},${REGION.e}`
+    + `&WIDTH=${RW}&HEIGHT=${RH}&FORMAT=image/jpeg`;
+  const img = await createImageBitmap(await (await fetch(url)).blob());
+  const cv = document.createElement('canvas');
+  cv.width = RW; cv.height = RH;
+  const g = cv.getContext('2d');
+  g.drawImage(img, 0, 0);
+  const px = g.getImageData(0, 0, RW, RH).data;
+  const gray = new Float32Array(RW * RH);
+  for (let i = 0; i < gray.length; i++) gray[i] = (0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2]) / 255;
+  return gray;
+}
+async function renderTextures() {
+  const token = ++textureToken;
+  const wanted = ['ocean', 'land'].filter(w => style[w + 'Texture']);
+  for (const w of ['ocean', 'land']) if (!wanted.includes(w) && textureLayers[w]) {
+    viewer.imageryLayers.remove(textureLayers[w]);
+    textureLayers[w] = null;
+  }
+  if (!wanted.length || !landGeo) return;
+  terrainGray ||= await loadTerrain().catch(() => null);
+  landMask ||= rasterize(landPolys());
+  if (!terrainGray || token !== textureToken) return;
+  for (const w of wanted) {
+    const isLand = w === 'land', spec = style[w + 'Texture'];
+    if (!textureStats[w]) {
+      let n = 0, sum = 0, sq = 0;
+      for (let i = 0; i < terrainGray.length; i++) if (!!landMask[i] === isLand) { n++; sum += terrainGray[i]; sq += terrainGray[i] ** 2; }
+      const mean = sum / n;
+      textureStats[w] = { mean, std: Math.sqrt(Math.max(1e-6, sq / n - mean * mean)) };
+    }
+    const { mean, std } = textureStats[w];
+    const cv = document.createElement('canvas');
+    cv.width = RW; cv.height = RH;
+    const g = cv.getContext('2d');
+    const out = g.createImageData(RW, RH), d = out.data, k = 0.35 * (spec.contrast ?? 1);
+    for (let i = 0; i < terrainGray.length; i++) {
+      if (!!landMask[i] !== isLand) continue;
+      const z = (terrainGray[i] - mean) / std, v = z > 0 ? 255 : 0;
+      d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v;
+      d[i * 4 + 3] = Math.min(255, Math.abs(z) * k * 255);
+    }
+    g.putImageData(out, 0, 0);
+    const url = URL.createObjectURL(await new Promise(r => cv.toBlob(r)));
+    if (token !== textureToken) return URL.revokeObjectURL(url);
+    const layer = viewer.imageryLayers.addImageryProvider(new C.SingleTileImageryProvider({
+      url, tileWidth: RW, tileHeight: RH, rectangle: C.Rectangle.fromDegrees(REGION.w, REGION.s, REGION.e, REGION.n),
+    }));
+    layer.alpha = spec.strength ?? 0.5;
+    const old = textureLayers[w];
+    textureLayers[w] = layer;
+    if (old) setTimeout(() => viewer.imageryLayers.remove(old), 400);
+  }
 }
 
 function applyCamera() {
@@ -698,6 +761,11 @@ const CONTROLS = [
   { group: 'Surfaces', label: 'California colour', type: 'color', show: has('fills'), part: 'fills', get: st => st.fills.california, set: (st, v) => st.fills.california = v },
   { group: 'Surfaces', label: 'California tone', min: 0, max: 2, step: 0.01, show: has('fills'), part: 'fills', get: st => st.fills.californiaTone ?? 1, set: (st, v) => st.fills.californiaTone = v },
 
+  { group: 'Textures', label: 'Ocean strength', min: 0, max: 1, step: 0.01, show: has('oceanTexture'), get: st => st.oceanTexture.strength, set: (st, v) => st.oceanTexture.strength = v },
+  { group: 'Textures', label: 'Ocean contrast', min: 0.2, max: 4, step: 0.05, show: has('oceanTexture'), part: 'textures', get: st => st.oceanTexture.contrast ?? 1, set: (st, v) => st.oceanTexture.contrast = v },
+  { group: 'Textures', label: 'Land strength', min: 0, max: 1, step: 0.01, show: has('landTexture'), get: st => st.landTexture.strength, set: (st, v) => st.landTexture.strength = v },
+  { group: 'Textures', label: 'Land contrast', min: 0.2, max: 4, step: 0.05, show: has('landTexture'), part: 'textures', get: st => st.landTexture.contrast ?? 1, set: (st, v) => st.landTexture.contrast = v },
+
   { group: 'Glow & atmosphere', label: 'City glow', min: 0, max: 4, step: 0.1, show: st => !!st.imagery || !!st.dots, get: st => st.bloom, set: (st, v) => st.bloom = v },
   { group: 'Glow & atmosphere', label: 'Atmosphere', min: -1, max: 1, step: 0.05, show: has('atmosphere'), get: st => st.atmosphereBrightness ?? 0, set: (st, v) => st.atmosphereBrightness = v },
   { group: 'Glow & atmosphere', label: 'Dim outside CA', min: 0, max: 0.95, step: 0.01, get: st => st.mask.alpha, set: (st, v) => st.mask.alpha = v },
@@ -709,7 +777,7 @@ const CONTROLS = [
   { group: 'Linework', label: 'Outline glow', min: 0, max: 0.6, step: 0.01, get: st => st.outline.glow, set: (st, v) => st.outline.glow = v },
   { group: 'Linework', label: 'Borders', min: 0, max: 1, step: 0.01, show: has('borders'), part: 'lines', get: st => alphaOf(st.borders.color), set: (st, v) => st.borders.color = withAlpha(st.borders.color, v) },
   { group: 'Linework', label: 'Border width', min: 0.5, max: 4, step: 0.25, show: has('borders'), part: 'lines', get: st => st.borders.width, set: (st, v) => st.borders.width = v },
-  { group: 'Linework', label: 'Grid strength', min: 0, max: 3, step: 0.05, show: has('graticule'), part: 'lines', get: st => st.gridOpacity ?? 1, set: (st, v) => st.gridOpacity = v },
+  { group: 'Linework', label: 'Grid strength', min: 0, max: 3, step: 0.05, show: st => !!st.graticule && st.showGrid, part: 'lines', get: st => st.gridOpacity ?? 1, set: (st, v) => st.gridOpacity = v },
 
   { group: 'Dots', label: 'Dot size', min: 0.5, max: 6, step: 0.1, show: has('dots'), part: 'dots', get: st => st.dots.size, set: (st, v) => st.dots.size = v },
   { group: 'Dots', label: 'Dot brightness', min: 0.05, max: 1, step: 0.01, show: has('dots'), part: 'dots', get: st => st.dots.alpha, set: (st, v) => st.dots.alpha = v },
@@ -732,18 +800,64 @@ const CONTROLS = [
   { group: 'Horizon layers', label: 'Layer glow', min: 0, max: 3, step: 0.05, show: has('shells'), get: st => st.shells.glow ?? 0, set: (st, v) => st.shells.glow = v },
   { group: 'Horizon layers', label: 'Glow height', min: 0.005, max: 0.3, step: 0.005, show: has('shells'), get: st => st.shells.glowHeight ?? 0.05, set: (st, v) => st.shells.glowHeight = v },
 
-  { group: 'Texture', label: 'Circle pattern', min: 0, max: 0.4, step: 0.005, show: has('pattern'), get: st => st.pattern.alpha, set: (st, v) => st.pattern.alpha = v },
-  { group: 'Texture', label: 'Pattern scale', min: 1, max: 20, step: 0.5, show: has('pattern'), get: st => st.pattern.scale, set: (st, v) => st.pattern.scale = v },
-  { group: 'Texture', label: 'Paper mottling', min: 0, max: 0.25, step: 0.005, get: st => st.paper?.amount ?? 0, set: (st, v) => st.paper = { scale: 3, ...st.paper, amount: v } },
-  { group: 'Texture', label: 'Mottling scale', min: 0.5, max: 12, step: 0.25, get: st => st.paper?.scale ?? 3, set: (st, v) => st.paper = { amount: 0, ...st.paper, scale: v } },
-  { group: 'Texture', label: 'Vignette', min: 0, max: 1, step: 0.01, get: st => st.vignette, set: (st, v) => st.vignette = v },
-  { group: 'Texture', label: 'Grain', min: 0, max: 0.2, step: 0.005, get: st => st.grain, set: (st, v) => st.grain = v },
+  { group: 'Finish', label: 'Circle pattern', min: 0, max: 0.4, step: 0.005, show: has('pattern'), get: st => st.pattern.alpha, set: (st, v) => st.pattern.alpha = v },
+  { group: 'Finish', label: 'Pattern scale', min: 1, max: 20, step: 0.5, show: has('pattern'), get: st => st.pattern.scale, set: (st, v) => st.pattern.scale = v },
+  { group: 'Finish', label: 'Paper mottling', min: 0, max: 0.25, step: 0.005, get: st => st.paper?.amount ?? 0, set: (st, v) => st.paper = { scale: 3, ...st.paper, amount: v } },
+  { group: 'Finish', label: 'Mottling scale', min: 0.5, max: 12, step: 0.25, get: st => st.paper?.scale ?? 3, set: (st, v) => st.paper = { amount: 0, ...st.paper, scale: v } },
+  { group: 'Finish', label: 'Vignette', min: 0, max: 1, step: 0.01, get: st => st.vignette, set: (st, v) => st.vignette = v },
+  { group: 'Finish', label: 'Grain', min: 0, max: 0.2, step: 0.005, get: st => st.grain, set: (st, v) => st.grain = v },
 ];
 
 const debounced = (fn, ms) => { let t; return () => { clearTimeout(t); t = setTimeout(fn, ms); }; };
-const redraw = { lines: debounced(renderLines, 200), dots: debounced(renderDots, 250), fills: debounced(renderFills, 250) };
+const redraw = { lines: debounced(renderLines, 200), dots: debounced(renderDots, 250), fills: debounced(renderFills, 250),
+                 textures: debounced(renderTextures, 300) };
+// Optional layers any style can switch on. A style that doesn't define one gets a default built
+// from its own line colour, so it fits in; switching off keeps tuned values for switching back on.
+const ink = st => css(st.outline.color).withAlpha(1).toCssColorString();
+const FEATURES = [
+  { key: 'graticule', label: 'Lat/long grid', part: 'lines',
+    on: st => !!st.graticule && st.showGrid,
+    enable: st => {
+      st.graticule ||= [{ step: 1, color: withAlpha(ink(st), 0.07), width: 1 }, { step: 5, color: withAlpha(ink(st), 0.25), width: 1 }];
+      st.showGrid = true;
+    },
+    disable: st => st.showGrid = false },
+  { key: 'oceanTexture', label: 'Ocean texture', part: 'textures', make: () => ({ strength: 0.5, contrast: 1.5 }) },
+  { key: 'landTexture', label: 'Land texture', part: 'textures', make: () => ({ strength: 0.5, contrast: 1 }) },
+  { key: 'dots', label: 'Dots', part: 'dots',
+    make: st => ({ color: ink(st), alpha: 0.5, size: 1.5, spacing: 11, outsideSpacing: 22, lights: 0.6, outsideLights: 0.6 }) },
+  { key: 'horizonLines', label: 'Horizon lines',
+    make: st => ({ color: ink(st), alpha: 0.5, count: 130, extent: 0.45, growth: 60, glow: 1, glowHeight: 0.04, overGlobe: 0 }) },
+  { key: 'shells', label: 'Horizon layers',
+    make: st => ({ color: ink(st), alpha: 0.1, count: 4, spacing: 0.06, edge: 0.3, glow: 0.5, glowHeight: 0.05 }) },
+  { key: 'pattern', label: 'Circle pattern', make: st => ({ color: ink(st), alpha: 0.08, scale: 5 }) },
+];
+for (const f of FEATURES) {
+  f.on ||= st => !!st[f.key];
+  f.enable ||= st => st[f.key] = st._stash?.[f.key] ?? f.make(st);
+  f.disable ||= st => { (st._stash ||= {})[f.key] = st[f.key]; st[f.key] = null; };
+}
+const RENDER = { lines: renderLines, dots: renderDots, textures: renderTextures };
+
 function buildStyleControls() {
   look.innerHTML = '';
+  const layersBox = document.createElement('details');
+  layersBox.open = true;
+  layersBox.innerHTML = '<summary>Layers</summary>';
+  for (const f of FEATURES) {
+    const label = document.createElement('label');
+    label.className = 'check';
+    label.innerHTML = `<input type="checkbox"> ${f.label}`;
+    const box = label.querySelector('input');
+    box.checked = f.on(style);
+    box.onchange = () => {
+      (box.checked ? f.enable : f.disable)(style);
+      if (f.part) RENDER[f.part](); else renderFx();
+      buildStyleControls(); // show or hide this layer's dials
+    };
+    layersBox.appendChild(label);
+  }
+  look.appendChild(layersBox);
   const groups = new Map();
   for (const ctl of CONTROLS) {
     if (ctl.show && !ctl.show(style)) continue;
@@ -774,12 +888,11 @@ for (const [key, st] of Object.entries(GLOBE_STYLES)) styleSelect.add(new Option
 styleSelect.onchange = e => applyStyle(e.target.value);
 document.getElementById('resetStyle').onclick = () => applyStyle(styleKey);
 document.getElementById('copyStyle').onclick = async () => {
-  const text = `${styleKey}: ${JSON.stringify(style, null, 2)},`;
+  const text = `${styleKey}: ${JSON.stringify(style, (k, v) => k === '_stash' ? undefined : v, 2)},`;
   try { await navigator.clipboard.writeText(text); status('Style settings copied. Paste them to Claude to make them the default.'); }
   catch { document.getElementById('readout').textContent = text; status('Clipboard blocked; settings shown below.'); }
 };
 document.getElementById('outline').onchange = e => outlineEntities.forEach(en => en.show = e.target.checked);
-document.getElementById('grid').onchange = e => { style.showGrid = e.target.checked; renderLines(); };
 document.getElementById('guides').onchange = e => document.getElementById('safe').classList.toggle('on', e.target.checked);
 const aspectSelect = document.getElementById('aspect');
 function fitFrame() {
@@ -865,7 +978,7 @@ document.getElementById('kmlBtn').onclick = async () => {
 
 window.app = { s, applyCamera, applyStyle, viewer, state: () => ({ dots: dotPrims?.length, landMask: !!landMask, lights: !!lightGrid }) };
 applyStyle(styleSelect.value); syncAll(); applyCamera();
-dataReady.then(() => { renderLines(); renderDots(); renderFills(); }); // keeps any slider tweaks made while data loaded
+dataReady.then(() => { renderLines(); renderDots(); renderFills(); renderTextures(); }); // keeps any slider tweaks made while data loaded
 new ResizeObserver(() => applyCamera()).observe(document.getElementById('frame'));
 </script>
 </body>
