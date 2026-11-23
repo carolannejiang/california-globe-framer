@@ -243,7 +243,7 @@ async function setDots(spec) {
   const base = css(spec.color);
   const scale = new C.NearFarScalar(3e5, 1.6, 6e6, 0.35);
   // California gets its own grid at `spacing`; other land uses `outsideSpacing` (sparser = darker tone)
-  const addGrid = (spacingKm, inCalifornia, lights) => {
+  const addGrid = (spacingKm, inCalifornia, lights, size, alpha) => {
     const dLat = spacingKm / 111.2;
     let row = 0;
     for (let lat = REGION.s; lat < REGION.n; lat += dLat, row++) {
@@ -257,15 +257,15 @@ async function setDots(spec) {
         const l = Math.pow(light / 255, 1.5) * lights;
         col.add({
           position: C.Cartesian3.fromDegrees(lon, lat, 1500),
-          pixelSize: spec.size * (1 + 1.8 * l),
-          color: base.withAlpha(Math.min(1, spec.alpha * (1 + 1.5 * l))),
+          pixelSize: size * (1 + 1.8 * l),
+          color: base.withAlpha(Math.min(1, alpha * (1 + 1.5 * l))),
           scaleByDistance: scale,
         });
       }
     }
   };
-  addGrid(spec.spacing, true, spec.lights);
-  addGrid(spec.outsideSpacing ?? spec.spacing, false, outsideLights);
+  addGrid(spec.spacing, true, spec.lights, spec.size, spec.alpha);
+  addGrid(spec.outsideSpacing ?? spec.spacing, false, outsideLights, spec.outsideSize ?? spec.size, spec.outsideAlpha ?? spec.alpha);
   dotPrims = scene.primitives.add(col);
 }
 
@@ -779,8 +779,10 @@ const CONTROLS = [
   { group: 'Linework', label: 'Border width', min: 0.5, max: 4, step: 0.25, show: has('borders'), part: 'lines', get: st => st.borders.width, set: (st, v) => st.borders.width = v },
   { group: 'Linework', label: 'Grid strength', min: 0, max: 3, step: 0.05, show: st => !!st.graticule && st.showGrid, part: 'lines', get: st => st.gridOpacity ?? 1, set: (st, v) => st.gridOpacity = v },
 
-  { group: 'Dots', label: 'Dot size', min: 0.5, max: 6, step: 0.1, show: has('dots'), part: 'dots', get: st => st.dots.size, set: (st, v) => st.dots.size = v },
-  { group: 'Dots', label: 'Dot brightness', min: 0.05, max: 1, step: 0.01, show: has('dots'), part: 'dots', get: st => st.dots.alpha, set: (st, v) => st.dots.alpha = v },
+  { group: 'Dots', label: 'CA dot size', min: 0.5, max: 6, step: 0.1, show: has('dots'), part: 'dots', get: st => st.dots.size, set: (st, v) => st.dots.size = v },
+  { group: 'Dots', label: 'Other dot size', min: 0.5, max: 6, step: 0.1, show: has('dots'), part: 'dots', get: st => st.dots.outsideSize ?? st.dots.size, set: (st, v) => st.dots.outsideSize = v },
+  { group: 'Dots', label: 'CA brightness', min: 0.05, max: 1, step: 0.01, show: has('dots'), part: 'dots', get: st => st.dots.alpha, set: (st, v) => st.dots.alpha = v },
+  { group: 'Dots', label: 'Other brightness', min: 0.05, max: 1, step: 0.01, show: has('dots'), part: 'dots', get: st => st.dots.outsideAlpha ?? st.dots.alpha, set: (st, v) => st.dots.outsideAlpha = v },
   { group: 'Dots', label: 'CA dot gap km', min: 5, max: 40, step: 1, show: has('dots'), part: 'dots', get: st => st.dots.spacing, set: (st, v) => st.dots.spacing = v },
   { group: 'Dots', label: 'Other gap km', min: 10, max: 60, step: 1, show: has('dots'), part: 'dots', get: st => st.dots.outsideSpacing ?? st.dots.spacing, set: (st, v) => st.dots.outsideSpacing = v },
   { group: 'Dots', label: 'CA size variation', min: 0, max: 5, step: 0.05, show: has('dots'), part: 'dots', get: st => st.dots.lights, set: (st, v) => st.dots.lights = v },

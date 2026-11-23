@@ -25,7 +25,8 @@
 // limb        line drawn along the edge of the globe: { color, width, glow (soft halo radius in px, 0 = none) } or null
 // sheen       diagonal light across the globe, brightest top-left: { color, alpha } or null
 // dots        dot-matrix land, dots grow where NASA night lights are bright (western hemisphere only):
-//               { color, alpha, size (px), spacing (km between dots in California), outsideSpacing (km between dots elsewhere;
+//               { color, alpha, size (px) — both for California; outsideAlpha, outsideSize for other land (default to alpha, size),
+//                 spacing (km between dots in California), outsideSpacing (km between dots elsewhere;
 //                 larger = sparser, darker land around a brighter California), lights (how much bright cities enlarge dots in California: 0 = uniform dots),
 //                 outsideLights (the same for other land; defaults to lights) } or null
 // horizonLines  fine lines exactly parallel to the horizon, tightest at the horizon and widening outward
@@ -150,7 +151,7 @@ window.GLOBE_STYLES = {
       { step: 5, color: 'rgba(223,227,251,0.28)', width: 1 },
     ],
     showGrid: false,
-    dots: { color: '#cfd5f5', alpha: 0.5, size: 1.5, spacing: 11, outsideSpacing: 22, lights: 0.6, outsideLights: 0.6 },
+    dots: { color: '#cfd5f5', alpha: 0.5, outsideAlpha: 0.5, size: 1.5, outsideSize: 1.5, spacing: 11, outsideSpacing: 22, lights: 0.6, outsideLights: 0.6 },
     horizonLines: { color: '#dfe3fb', alpha: 0.5, count: 130, extent: 0.45, growth: 60, glow: 1.2, glowHeight: 0.04, overGlobe: 0 },
     limb: { color: 'rgba(225,230,255,0.8)', width: 1 },
   },
