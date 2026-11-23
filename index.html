@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>California Globe Framer</title>
+<script>window.CESIUM_BASE_URL = 'https://cdn.jsdelivr.net/npm/cesium@1.123.0/Build/Cesium/';</script>
+<script src="https://cdn.jsdelivr.net/npm/cesium@1.123.0/Build/Cesium/Cesium.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
+<link href="https://cdn.jsdelivr.net/npm/cesium@1.123.0/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+<style>
+  :root { --bg:#111; --panel:#1b1b1d; --fg:#e8e6e1; --muted:#9a978f; --accent:#f2b544; --line:#2c2c30; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:13px/1.4 -apple-system, system-ui, sans-serif; }
+  .app { display:flex; height:100%; gap:16px; padding:16px; }
+  .stage { flex:1; display:flex; align-items:center; justify-content:center; min-width:0; }
+  #frame { height:100%; max-width:100%; aspect-ratio: 8.5 / 11; position:relative; box-shadow:0 0 0 1px #333; }
+  #globe { position:absolute; inset:0; }
+  #globe .cesium-viewer-bottom { display:none; }
+  .safe { position:absolute; inset:0; pointer-events:none; display:none; }
+  .safe.on { display:block; }
+  .safe .mast { position:absolute; left:6%; right:6%; top:3%; height:14%; border:1px dashed rgba(255,255,255,.45); }
+  .safe .mast span { position:absolute; left:6px; top:4px; font-size:11px; color:rgba(255,255,255,.6); }
+  .safe .third { position:absolute; background:rgba(255,255,255,.18); }
+  aside { width:300px; flex:none; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px; overflow:auto; }
+  h1 { font-size:15px; margin:0 0 2px; }
+  .hint { color:var(--muted); font-size:12px; margin:0 0 12px; }
+  h2 { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:16px 0 6px; }
+  label.row { display:grid; grid-template-columns: 84px 1fr 52px; align-items:center; gap:8px; margin:4px 0; }
+  label.row output { text-align:right; font-variant-numeric:tabular-nums; color:var(--muted); }
+  input[type=range] { width:100%; accent-color:var(--accent); }
+  select, button, input[type=number] { background:#26262a; color:var(--fg); border:1px solid #3a3a40; border-radius:5px; padding:5px 8px; font:inherit; }
+  button { cursor:pointer; }
+  button.primary { background:var(--accent); color:#1a1408; border-color:var(--accent); font-weight:600; }
+  .btns { display:flex; flex-wrap:wrap; gap:6px; }
+  .check { display:flex; align-items:center; gap:6px; margin:4px 0; }
+  pre { background:#121214; border:1px solid var(--line); border-radius:5px; padding:8px; font-size:11px; white-space:pre-wrap; margin:6px 0; color:#cfcac0; }
+  #status { color:var(--muted); font-size:12px; margin-top:6px; min-height:1em; }
+  @media (max-width: 760px) { .app { flex-direction:column; height:auto; } #frame { height:auto; width:100%; } aside { width:100%; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="stage">
+    <div id="frame">
+      <div id="globe"></div>
+      <div class="safe" id="safe">
+        <div class="mast"><span>masthead</span></div>
+        <div class="third" style="left:33.33%;top:0;bottom:0;width:1px"></div>
+        <div class="third" style="left:66.66%;top:0;bottom:0;width:1px"></div>
+        <div class="third" style="top:33.33%;left:0;right:0;height:1px"></div>
+        <div class="third" style="top:66.66%;left:0;right:0;height:1px"></div>
+      </div>
+    </div>
+  </div>
+
+  <aside>
+    <h1>California Globe Framer</h1>
+    <p class="hint">Drag to orbit · scroll to zoom · shift-drag to move the target · alt-drag to roll.</p>
+
+    <h2>Presets</h2>
+    <div class="btns" id="presets"></div>
+
+    <h2>Camera</h2>
+    <div id="sliders"></div>
+
+    <h2>Look</h2>
+    <label class="row">Imagery
+      <select id="imagery" style="grid-column: span 2">
+        <option value="night">Night lights (NASA Black Marble)</option>
+        <option value="day">Day (NASA Blue Marble)</option>
+      </select>
+    </label>
+    <div id="lookSliders"></div>
+    <label class="check"><input type="checkbox" id="outline" checked> California outline</label>
+    <label class="check"><input type="checkbox" id="atmo" checked> Atmosphere haze on ground</label>
+    <label class="check"><input type="checkbox" id="stars" checked> Stars</label>
+
+    <h2>Frame</h2>
+    <label class="row">Aspect
+      <select id="aspect" style="grid-column: span 2">
+        <option value="8.5/11">Magazine 8.5 × 11</option>
+        <option value="8.375/10.875">Magazine 8⅜ × 10⅞</option>
+        <option value="4/5">4 : 5</option>
+        <option value="1/1">Square</option>
+        <option value="16/9">16 : 9</option>
+      </select>
+    </label>
+    <label class="check"><input type="checkbox" id="guides"> Masthead + thirds guides</label>
+
+    <h2>Export</h2>
+    <label class="row">Height px <input type="number" id="exportH" value="3300" min="500" max="8000" step="100" style="grid-column: span 2"></label>
+    <div class="btns">
+      <button class="primary" id="exportBtn">Export PNG</button>
+      <button id="kmlBtn">Copy Google Earth view</button>
+    </div>
+    <div id="status"></div>
+
+    <h2>Camera position (for Google Earth Pro / Blender)</h2>
+    <pre id="readout"></pre>
+  </aside>
+</div>
+
+<script>
+const C = Cesium;
+const rad = C.Math.toRadians, deg = C.Math.toDegrees;
+
+// All camera state lives here; the camera is always derived from it.
+const s = { lat: 37.0, lon: -119.4, range: 1900, heading: -12, pitch: -32, roll: 0, fov: 55,
+            brightness: 1.6, contrast: 1.3, mask: 0.45, bloom: 0 };
+
+const PRESETS = {
+  'From the south': { lat: 37.0, lon: -119.4, range: 1900, heading: -12, pitch: -32, roll: 0, fov: 55 },
+  'ISS diagonal':   { lat: 36.6, lon: -119.2, range: 1500, heading: -35, pitch: -42, roll: 6, fov: 62 },
+  'From the SW':    { lat: 37.3, lon: -119.6, range: 1700, heading: 18, pitch: -48, roll: 0, fov: 55 },
+  'High & flat':    { lat: 37.2, lon: -119.4, range: 4200, heading: -20, pitch: -60, roll: 0, fov: 40 },
+};
+
+const viewer = new C.Viewer('globe', {
+  baseLayer: false, animation: false, timeline: false, baseLayerPicker: false, geocoder: false,
+  homeButton: false, sceneModePicker: false, navigationHelpButton: false, fullscreenButton: false,
+  infoBox: false, selectionIndicator: false,
+  contextOptions: { webgl: { preserveDrawingBuffer: true } },
+});
+const scene = viewer.scene, camera = viewer.camera;
+scene.globe.baseColor = C.Color.BLACK;
+scene.globe.enableLighting = false;
+scene.moon.show = false;
+scene.sun.show = false;
+scene.backgroundColor = C.Color.BLACK;
+scene.screenSpaceCameraController.enableInputs = false;
+viewer.useBrowserRecommendedResolution = false;
+
+const gibs = (layer, date, ext) => new C.UrlTemplateImageryProvider({
+  url: `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/${layer}/default/${date}/GoogleMapsCompatible_Level8/{z}/{y}/{x}.${ext}`,
+  maximumLevel: 8, credit: 'NASA GIBS',
+});
+const layers = {
+  night: viewer.imageryLayers.addImageryProvider(gibs('VIIRS_Black_Marble', '2016-01-01', 'png')),
+  day: viewer.imageryLayers.addImageryProvider(gibs('BlueMarble_ShadedRelief_Bathymetry', '2004-08-01', 'jpeg')),
+};
+layers.day.show = false;
+
+// California outline + darkening mask outside the state
+const outlineEntities = [];
+let maskEntity;
+fetch('https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json').then(r => r.json()).then(topo => {
+  const ca = topojson.feature(topo, topo.objects.states).features.find(f => f.id === '06');
+  const polys = ca.geometry.type === 'MultiPolygon' ? ca.geometry.coordinates : [ca.geometry.coordinates];
+  const holes = [];
+  for (const poly of polys) {
+    const ring = poly[0];
+    holes.push(new C.PolygonHierarchy(C.Cartesian3.fromDegreesArray(ring.flat())));
+    outlineEntities.push(viewer.entities.add({ polyline: {
+      positions: C.Cartesian3.fromDegreesArrayHeights(ring.flatMap(([x, y]) => [x, y, 400])),
+      width: 4, arcType: C.ArcType.RHUMB,
+      material: new C.PolylineGlowMaterialProperty({ glowPower: 0.3, color: C.Color.fromCssColorString('#ffcf6b') }),
+    }}));
+  }
+  const outer = C.Cartesian3.fromDegreesArray([-150, 10, -80, 10, -80, 65, -150, 65]);
+  maskEntity = viewer.entities.add({ polygon: {
+    hierarchy: new C.PolygonHierarchy(outer, holes), height: 200, arcType: C.ArcType.RHUMB,
+    material: new C.ColorMaterialProperty(new C.CallbackProperty(() => C.Color.BLACK.withAlpha(s.mask), false)),
+  }});
+});
+
+function applyCamera() {
+  camera.frustum.fov = rad(s.fov);
+  camera.lookAt(C.Cartesian3.fromDegrees(s.lon, s.lat, 0), new C.HeadingPitchRange(rad(s.heading), rad(s.pitch), s.range * 1000));
+  camera.twistRight(rad(s.roll));
+  updateReadout();
+}
+
+function applyLook() {
+  for (const l of Object.values(layers)) { l.brightness = s.brightness; l.contrast = s.contrast; }
+  const bloom = scene.postProcessStages.bloom;
+  bloom.enabled = s.bloom > 0;
+  bloom.uniforms.glowOnly = false;
+  bloom.uniforms.contrast = 128;
+  bloom.uniforms.brightness = -0.3 + s.bloom * 0.25;
+  bloom.uniforms.delta = 1;
+  bloom.uniforms.sigma = 2 + s.bloom * 2;
+  bloom.uniforms.stepSize = 1;
+}
+
+function cameraView() {
+  const c = C.Cartographic.fromCartesian(camera.positionWC);
+  return { lat: deg(c.latitude), lon: deg(c.longitude), alt: c.height,
+           heading: (deg(camera.heading) + 360) % 360, pitch: deg(camera.pitch), roll: deg(camera.roll) };
+}
+
+function updateReadout() {
+  const v = cameraView(), R = 6371;
+  const h = v.alt / 1000;
+  const horizonKm = Math.sqrt(2 * R * h + h * h);
+  const dip = deg(Math.acos(R / (R + h)));
+  document.getElementById('readout').textContent =
+`Camera lat/lon   ${v.lat.toFixed(4)}, ${v.lon.toFixed(4)}
+Altitude         ${h.toFixed(0)} km
+Heading          ${v.heading.toFixed(1)}°
+Tilt (GE)        ${(90 + v.pitch).toFixed(1)}°   (pitch ${v.pitch.toFixed(1)}°)
+Roll             ${v.roll.toFixed(1)}°
+Vertical FOV     ${s.fov}°
+Horizon          ${horizonKm.toFixed(0)} km away, ${dip.toFixed(1)}° below level`;
+}
+
+// ---- controls ----
+function slider(parent, key, label, min, max, step, onChange) {
+  const row = document.createElement('label');
+  row.className = 'row';
+  row.innerHTML = `${label}<input type="range" min="${min}" max="${max}" step="${step}"><output></output>`;
+  const input = row.querySelector('input'), out = row.querySelector('output');
+  input.addEventListener('input', () => { s[key] = +input.value; out.textContent = input.value; onChange(); });
+  parent.appendChild(row);
+  return () => { input.value = s[key]; out.textContent = s[key]; };
+}
+const sync = [];
+const cam = document.getElementById('sliders'), look = document.getElementById('lookSliders');
+sync.push(slider(cam, 'range', 'Distance km', 300, 9000, 10, applyCamera));
+sync.push(slider(cam, 'pitch', 'Tilt', -90, -3, 0.5, applyCamera));
+sync.push(slider(cam, 'heading', 'Heading', -180, 180, 0.5, applyCamera));
+sync.push(slider(cam, 'roll', 'Roll', -60, 60, 0.5, applyCamera));
+sync.push(slider(cam, 'fov', 'Lens FOV', 10, 110, 1, applyCamera));
+sync.push(slider(cam, 'lat', 'Target lat', 30, 45, 0.05, applyCamera));
+sync.push(slider(cam, 'lon', 'Target lon', -126, -110, 0.05, applyCamera));
+sync.push(slider(look, 'brightness', 'Brightness', 0.3, 4, 0.05, applyLook));
+sync.push(slider(look, 'contrast', 'Contrast', 0.5, 3, 0.05, applyLook));
+sync.push(slider(look, 'mask', 'Dim outside', 0, 0.95, 0.01, () => {}));
+sync.push(slider(look, 'bloom', 'City glow', 0, 4, 0.1, applyLook));
+const syncAll = () => sync.forEach(f => f());
+
+const presetBox = document.getElementById('presets');
+for (const [name, p] of Object.entries(PRESETS)) {
+  const b = document.createElement('button');
+  b.textContent = name;
+  b.onclick = () => { Object.assign(s, p); syncAll(); applyCamera(); };
+  presetBox.appendChild(b);
+}
+
+document.getElementById('imagery').onchange = e => {
+  const night = e.target.value === 'night';
+  layers.night.show = night; layers.day.show = !night;
+  Object.assign(s, night ? { brightness: 1.6, contrast: 1.3 } : { brightness: 1, contrast: 1.1 });
+  syncAll(); applyLook();
+};
+document.getElementById('outline').onchange = e => outlineEntities.forEach(en => en.show = e.target.checked);
+document.getElementById('atmo').onchange = e => scene.globe.showGroundAtmosphere = e.target.checked;
+document.getElementById('stars').onchange = e => scene.skyBox.show = e.target.checked;
+document.getElementById('guides').onchange = e => document.getElementById('safe').classList.toggle('on', e.target.checked);
+document.getElementById('aspect').onchange = e => {
+  document.getElementById('frame').style.aspectRatio = e.target.value.replace('/', ' / ');
+  setTimeout(applyCamera, 50);
+};
+
+// Mouse: drag = orbit, shift-drag = move target, alt-drag = roll, wheel = distance
+const canvas = scene.canvas;
+let drag = null;
+canvas.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY }; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointerup', () => drag = null);
+canvas.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  drag = { x: e.clientX, y: e.clientY };
+  if (e.altKey) s.roll = C.Math.clamp(s.roll + dx * 0.2, -60, 60);
+  else if (e.shiftKey) {
+    const k = s.range / 120000 * 5;
+    const h = rad(s.heading);
+    s.lon -= (dx * Math.cos(h) + dy * Math.sin(h)) * k / Math.cos(rad(s.lat));
+    s.lat += (dy * Math.cos(h) - dx * Math.sin(h)) * k;
+  } else {
+    s.heading = ((s.heading - dx * 0.25 + 540) % 360) - 180;
+    s.pitch = C.Math.clamp(s.pitch - dy * 0.2, -90, -3);
+  }
+  for (const k of ['heading', 'pitch', 'roll', 'lat', 'lon']) s[k] = +s[k].toFixed(2);
+  syncAll(); applyCamera();
+});
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  s.range = Math.round(C.Math.clamp(s.range * Math.exp(e.deltaY * 0.001), 300, 9000));
+  syncAll(); applyCamera();
+}, { passive: false });
+
+// ---- export ----
+const status = msg => document.getElementById('status').textContent = msg;
+document.getElementById('exportBtn').onclick = async () => {
+  const targetH = +document.getElementById('exportH').value;
+  const prev = viewer.resolutionScale;
+  // Cesium multiplies resolutionScale by devicePixelRatio
+  viewer.resolutionScale = targetH / (canvas.clientHeight * (window.devicePixelRatio || 1));
+  status('Loading tiles at full resolution…');
+  const t0 = performance.now();
+  let settled = 0;
+  await new Promise(resolve => {
+    const tick = () => {
+      viewer.render();
+      settled = scene.globe.tilesLoaded ? settled + 1 : 0;
+      if (settled > 10 || performance.now() - t0 > 45000) resolve(); else requestAnimationFrame(tick);
+    };
+    tick();
+  });
+  const url = canvas.toDataURL('image/png');
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `california-globe-${canvas.width}x${canvas.height}.png`;
+  a.click();
+  status(`Exported ${canvas.width} × ${canvas.height}px`);
+  viewer.resolutionScale = prev;
+};
+
+document.getElementById('kmlBtn').onclick = async () => {
+  const v = cameraView();
+  const kml = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2"><Document><Placemark><name>California cover view</name>
+<Camera><longitude>${v.lon.toFixed(5)}</longitude><latitude>${v.lat.toFixed(5)}</latitude><altitude>${v.alt.toFixed(0)}</altitude>
+<heading>${v.heading.toFixed(2)}</heading><tilt>${(90 + v.pitch).toFixed(2)}</tilt><roll>${v.roll.toFixed(2)}</roll>
+<altitudeMode>absolute</altitudeMode></Camera></Placemark></Document></kml>`;
+  try { await navigator.clipboard.writeText(kml); status('KML copied: paste into Google Earth Pro’s Places panel, then double-click it.'); }
+  catch { document.getElementById('readout').textContent = kml; status('Clipboard blocked; KML shown below.'); }
+};
+
+window.app = { s, applyCamera, viewer };
+syncAll(); applyLook(); applyCamera();
+new ResizeObserver(() => applyCamera()).observe(document.getElementById('frame'));
+</script>
+</body>
+</html>
