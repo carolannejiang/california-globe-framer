@@ -135,6 +135,10 @@ const layers = {
   night: viewer.imageryLayers.addImageryProvider(gibs('VIIRS_Black_Marble', '2016-01-01', 'png')),
   day: viewer.imageryLayers.addImageryProvider(gibs('BlueMarble_ShadedRelief_Bathymetry', '2004-08-01', 'jpeg')),
 };
+// Faint grayscale terrain drawn over the main imagery (style.imagery.relief); kept out of `layers`
+// so the brightness/contrast sliders don't touch it
+const reliefLayer = viewer.imageryLayers.addImageryProvider(gibs('BlueMarble_ShadedRelief_Bathymetry', '2004-08-01', 'jpeg'));
+Object.assign(reliefLayer, { show: false, saturation: 0, contrast: 1.6, brightness: 1.1 });
 scene.globe.depthTestAgainstTerrain = true; // hide linework on the far side of the globe
 
 const css = c => C.Color.fromCssColorString(c);
@@ -272,11 +276,15 @@ function setLines(key, sets, spec) {
   linePrims[key] = scene.primitives.add(col);
 }
 
-// Screen-space effects: gradient sky, sheen, line + halo along the globe's edge, and grain
+// Screen-space effects: gradient sky, sheen, horizon shells and ribbons, pattern, paper, vignette,
+// line + halo along the globe's edge, and grain
+const earthEye = new C.Cartesian3();
 const fx = scene.postProcessStages.add(new C.PostProcessStage({
   fragmentShader: `
     uniform sampler2D colorTexture;
     uniform sampler2D depthTexture;
+    uniform vec3 earthEye;     // Earth's centre in eye coordinates
+    uniform vec2 tanHalf;      // tan of half the horizontal / vertical field of view
     uniform vec4 limbColor;
     uniform float limbWidth;
     uniform float limbGlow;
@@ -287,27 +295,70 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
     uniform vec4 ribbonColor;
     uniform float ribbonDensity;
     uniform float ribbonOverGlobe;
+    uniform vec4 shellColor;
+    uniform float shellCount;
+    uniform float shellSpacing;
+    uniform float shellEdge;
+    uniform vec4 patternColor;
+    uniform float patternScale;
+    uniform float paper;
+    uniform float paperScale;
+    uniform float vignette;
     uniform float grain;
     in vec2 v_textureCoordinates;
     float sky(vec2 uv) { return czm_unpackDepth(texture(depthTexture, uv)) >= 1.0 ? 1.0 : 0.0; }
 
-    // A band of fine parallel lines following a wave; its width pinches and swells,
-    // so the lines bunch together like a twisting ribbon.
+    // Hairlines get wider in pixels at export resolution so prints match the on-screen (retina) look
+    float hairline(float coord) {
+      float fw = fwidth(coord) * max(1.0, czm_pixelRatio * 0.5);
+      return 1.0 - smoothstep(0.0, fw, abs(fract(coord + 0.5) - 0.5));
+    }
+
+    // Position relative to the Earth's horizon: y = angular height above the limb, x = distance along it.
+    // Both are scaled to roughly fractions of the frame height, so effects keep their size at any lens.
+    vec2 horizonCoords(vec2 uv) {
+      vec3 rd = normalize(vec3((uv * 2.0 - 1.0) * tanHalf, -1.0));
+      float D = length(earthEye);
+      vec3 ax = earthEye / D;
+      float limb = asin(clamp(6371000.0 / D, 0.0, 1.0));
+      float beta = acos(clamp(dot(rd, ax), -1.0, 1.0));
+      vec3 up = abs(ax.y) > 0.99 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
+      vec3 e1 = normalize(up - ax * dot(up, ax));
+      vec3 e2 = cross(ax, e1);
+      vec3 q = rd - ax * dot(rd, ax);
+      float theta = atan(dot(q, e2), dot(q, e1));
+      float k = 0.5 / tanHalf.y;
+      return vec2(theta * sin(limb) * k, (beta - limb) * k);
+    }
+
+    // A band of fine lines running along the horizon; its width pinches and swells so the
+    // lines bunch together like a twisting ribbon.
     float ribbon(vec2 p, float base, float amp, float f, float ph, float w, float g, float q) {
       float c = base + amp * sin(6.2831853 * (f * p.x + ph));
       float hw = w * (0.12 + 0.88 * abs(sin(6.2831853 * (g * p.x + q))));
       float v = (p.y - c) / hw;
       float lineCoord = v * ribbonDensity;
-      // Line width in pixels grows with export resolution so prints match the on-screen (retina) look
       float fw = fwidth(lineCoord) * max(1.0, czm_pixelRatio * 0.5);
-      float d = abs(fract(lineCoord + 0.5) - 0.5);
-      float line = 1.0 - smoothstep(0.0, fw, d);
-      line = mix(line, 0.55, smoothstep(0.35, 0.9, fw)); // where lines merge, use average coverage
+      float line = 1.0 - smoothstep(0.0, fw, abs(fract(lineCoord + 0.5) - 0.5));
+      line = mix(line, 0.45, smoothstep(0.15, 0.45, fw)); // where lines merge, use average coverage (avoids moiré)
       return line * step(abs(v), 1.0) * (1.0 - v * v);
+    }
+
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    float vnoise(vec2 p) {
+      vec2 i = floor(p), f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+    }
+    float fbm(vec2 p) {
+      float s = 0.0, a = 0.5;
+      for (int i = 0; i < 5; i++) { s += a * vnoise(p); p *= 2.03; a *= 0.5; }
+      return s;
     }
 
     void main() {
       vec2 uv = v_textureCoordinates;
+      vec2 frame = vec2(uv.x * czm_viewport.z / czm_viewport.w, uv.y); // aspect-correct, height = 1
       vec4 c = texture(colorTexture, uv);
       float self = sky(uv);
       if (bgGradient > 0.0 && self > 0.0) c.rgb = mix(bgBottom.rgb, bgTop.rgb, uv.y);
@@ -315,13 +366,38 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
         float t = clamp((1.0 - uv.x + uv.y) * 0.5, 0.0, 1.0);
         c.rgb += sheenColor.rgb * sheenColor.a * t * t;
       }
-      if (ribbonColor.a > 0.0) {
-        vec2 p = vec2(uv.x * czm_viewport.z / czm_viewport.w, uv.y);
-        float r = ribbon(p, 0.80, 0.10, 0.9, 0.10, 0.15, 0.7, 0.20)
-                + ribbon(p, 0.58, 0.20, 0.6, 0.60, 0.22, 0.5, 0.75)
-                + ribbon(p, 0.24, 0.14, 1.1, 0.35, 0.12, 0.9, 0.40);
-        float a = clamp(r, 0.0, 1.0) * ribbonColor.a * mix(ribbonOverGlobe, 1.0, self);
-        c.rgb = mix(c.rgb, ribbonColor.rgb, a);
+      if (paper > 0.0) {
+        // Mottled tone plus faint horizontal fibres, like uneven cyanotype or printed stock
+        float n = fbm(frame * paperScale) * 0.7 + fbm(frame * paperScale * vec2(1.0, 7.0) + 13.0) * 0.3;
+        c.rgb *= 1.0 + (n - 0.5) * paper * 2.0;
+      }
+      if (patternColor.a > 0.0) {
+        // Interlaced circles: two offset lattices of rings
+        vec2 g = frame * patternScale;
+        float r1 = length(fract(g) - 0.5) * 2.0, r2 = length(fract(g + 0.5) - 0.5) * 2.0;
+        float pat = max(hairline(r1) * step(r1, 1.5), hairline(r2) * step(r2, 1.5));
+        c.rgb = mix(c.rgb, patternColor.rgb, pat * patternColor.a);
+      }
+      if (shellCount > 0.0 || ribbonColor.a > 0.0) {
+        vec2 hp = horizonCoords(uv);
+        if (shellCount > 0.0) {
+          // Stepped translucent layers above the horizon; spacing drifts along the arc so the
+          // layers read as overlapping glass rings rather than perfect bullseyes
+          float y = hp.y / (shellSpacing * (1.0 + 0.25 * sin(hp.x * 2.3 + 0.7)));
+          float edge = hairline(y) * step(0.5, y) * step(y, shellCount + 0.5);
+          if (self > 0.0) {
+            float inside = step(0.0, y) * step(y, shellCount);
+            c.rgb = mix(c.rgb, shellColor.rgb, inside * shellColor.a * (1.0 - floor(y) / shellCount));
+            c.rgb = mix(c.rgb, shellColor.rgb, edge * shellEdge);
+          }
+        }
+        if (ribbonColor.a > 0.0) {
+          float r = ribbon(hp, 0.060, 0.015, 1.2, 0.10, 0.050, 1.4, 0.20)
+                  + ribbon(hp, 0.170, 0.035, 0.8, 0.55, 0.080, 0.9, 0.70)
+                  + ribbon(hp, 0.320, 0.050, 0.5, 0.30, 0.110, 0.6, 0.45);
+          float a = clamp(r, 0.0, 1.0) * ribbonColor.a * exp(-max(hp.y, 0.0) / 0.3) * mix(ribbonOverGlobe, 1.0, self);
+          c.rgb = mix(c.rgb, ribbonColor.rgb, a);
+        }
       }
       if (limbGlow > 0.0 && self > 0.0) {
         float halo = 0.0;
@@ -344,15 +420,24 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
         edge = clamp(edge / 3.0, 0.0, 1.0); // soft coverage instead of a hard step, so the line isn't jagged
         c.rgb = mix(c.rgb, limbColor.rgb, edge * (1.0 - self) * limbColor.a);
       }
+      if (vignette > 0.0) c.rgb *= 1.0 - vignette * pow(length(uv - 0.5) * 1.41, 2.5);
       if (grain > 0.0) {
         float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
         c.rgb += (n - 0.5) * grain;
       }
       out_FragColor = c;
     }`,
-  uniforms: { limbColor: C.Color.WHITE, limbWidth: 0, limbGlow: 0, bgGradient: 0, bgTop: C.Color.BLACK,
-              bgBottom: C.Color.BLACK, sheenColor: C.Color.TRANSPARENT, ribbonColor: C.Color.TRANSPARENT,
-              ribbonDensity: 40, ribbonOverGlobe: 0.3, grain: 0 },
+  uniforms: {
+    earthEye: () => C.Matrix4.multiplyByPoint(camera.viewMatrix, C.Cartesian3.ZERO, earthEye),
+    tanHalf: () => {
+      const t = Math.tan(camera.frustum.fovy / 2);
+      return new C.Cartesian2(t * camera.frustum.aspectRatio, t);
+    },
+    limbColor: C.Color.WHITE, limbWidth: 0, limbGlow: 0, bgGradient: 0, bgTop: C.Color.BLACK,
+    bgBottom: C.Color.BLACK, sheenColor: C.Color.TRANSPARENT, ribbonColor: C.Color.TRANSPARENT,
+    ribbonDensity: 40, ribbonOverGlobe: 0, shellColor: C.Color.TRANSPARENT, shellCount: 0, shellSpacing: 0.05,
+    shellEdge: 0, patternColor: C.Color.TRANSPARENT, patternScale: 6, paper: 0, paperScale: 4, vignette: 0, grain: 0,
+  },
 }));
 
 function applyStyle(key) {
@@ -367,6 +452,8 @@ function applyStyle(key) {
     layer.colorToAlpha = im?.colorToAlpha ? css(im.colorToAlpha) : undefined;
     layer.colorToAlphaThreshold = im?.colorToAlphaThreshold ?? 0.004;
   }
+  reliefLayer.show = (im?.relief ?? 0) > 0;
+  reliefLayer.alpha = im?.relief ?? 0;
   s.brightness = im?.brightness ?? 1;
   s.contrast = im?.contrast ?? 1;
   s.mask = style.mask.alpha;
@@ -383,7 +470,17 @@ function applyStyle(key) {
   const rb = style.ribbons;
   fx.uniforms.ribbonColor = rb ? css(rb.color).withAlpha(rb.alpha) : C.Color.TRANSPARENT;
   fx.uniforms.ribbonDensity = rb?.density ?? 40;
-  fx.uniforms.ribbonOverGlobe = rb?.overGlobe ?? 0.3;
+  fx.uniforms.ribbonOverGlobe = rb?.overGlobe ?? 0;
+  const sh = style.shells;
+  fx.uniforms.shellCount = sh?.count ?? 0;
+  fx.uniforms.shellColor = sh ? css(sh.color).withAlpha(sh.alpha) : C.Color.TRANSPARENT;
+  fx.uniforms.shellSpacing = sh?.spacing ?? 0.05;
+  fx.uniforms.shellEdge = sh?.edge ?? 0;
+  fx.uniforms.patternColor = style.pattern ? css(style.pattern.color).withAlpha(style.pattern.alpha) : C.Color.TRANSPARENT;
+  fx.uniforms.patternScale = style.pattern?.scale ?? 6;
+  fx.uniforms.paper = style.paper?.amount ?? 0;
+  fx.uniforms.paperScale = style.paper?.scale ?? 4;
+  fx.uniforms.vignette = style.vignette;
   scene.skyBox.show = style.stars;
   scene.skyAtmosphere.show = style.atmosphere;
   scene.globe.showGroundAtmosphere = style.groundHaze;
@@ -397,7 +494,8 @@ function applyStyle(key) {
       : new C.ColorMaterialProperty(css(o.color));
   }
   setLines('borders', lineSets.borders, style.borders);
-  setLines('graticule', style.graticule ? graticule(style.graticule.step) : [], style.graticule);
+  const grids = [].concat(style.graticule || []);
+  for (let i = 0; i < 3; i++) setLines('graticule' + i, grids[i] ? graticule(grids[i].step) : [], grids[i]);
   setDots(style.dots);
 
   fx.uniforms.limbColor = css(style.limb?.color ?? '#ffffff');
@@ -499,6 +597,7 @@ function fitFrame() {
 aspectSelect.onchange = fitFrame;
 window.addEventListener('resize', fitFrame);
 fitFrame();
+viewer.resize();
 
 // Mouse: drag = orbit, shift-drag = move target, alt-drag = roll, wheel = distance
 const canvas = scene.canvas;
@@ -540,6 +639,7 @@ document.getElementById('exportBtn').onclick = async () => {
   let settled = 0;
   await new Promise(resolve => {
     const tick = () => {
+      viewer.resize(); // Cesium only resizes in its own loop, which may not have run yet
       viewer.render();
       settled = scene.globe.tilesLoaded ? settled + 1 : 0;
       if (settled > 10 || performance.now() - t0 > 45000) resolve(); else requestAnimationFrame(tick);

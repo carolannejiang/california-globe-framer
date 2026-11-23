@@ -8,19 +8,25 @@
 //   hue         rotation in degrees
 //   alpha       0–1; below 1 the imagery blends over globeColor (grayscale + low alpha = tinted relief)
 //   colorToAlpha, colorToAlphaThreshold   make one colour see-through, e.g. '#000000' keeps only the city lights
+//   relief      0–1: faint grayscale terrain laid over the imagery, for texture on land
 // globeColor  colour of the globe surface under the imagery
 // background  colour of space, or [top, bottom] for a vertical gradient
 // stars, atmosphere (blue rim glow), groundHaze (atmospheric haze + fog on the surface)
 // outline     California outline: color, width (px), glow (0 = flat line, ~0.3 = soft neon)
 // borders     coastlines, country and state borders: { color, width } or null
-// graticule   lat/lon grid: { step (degrees), color, width } or null
+// graticule   lat/lon grid: { step (degrees), color, width }, a list of up to 3 of those (e.g. fine + bold), or null
 // mask        tint over everything outside California: { color, alpha }
 // limb        line drawn along the edge of the globe: { color, width, glow (soft halo radius in px, 0 = none) } or null
 // sheen       diagonal light across the globe, brightest top-left: { color, alpha } or null
 // dots        dot-matrix land, dots grow where NASA night lights are bright (western hemisphere only):
 //               { color, alpha, size (px), spacing (km between dots), lights (0 = uniform dots, 1 = full city boost) } or null
-// ribbons     flowing bands of fine lines across the frame:
+// ribbons     bands of fine lines that hug the horizon like stylised atmosphere layers, twisting as they travel along it:
 //               { color, alpha, density (lines per band), overGlobe (0–1 strength over the globe vs. space) } or null
+// shells      stepped translucent layers above the horizon, each with a hairline edge, like overlapping glass rings:
+//               { color, alpha (fill of the innermost layer; 0 = edges only), count, spacing (fraction of frame height), edge (hairline strength) } or null
+// pattern     faint interlaced-circle lattice over the whole frame: { color, alpha, scale (circles per frame height) } or null
+// paper       mottled tone with faint fibres, like uneven printed stock: { amount (0–0.2), scale (blotches per frame height) } or null
+// vignette    darken toward the corners, 0–1
 // grain       film/paper noise, 0–0.2
 // bloom       glow around bright areas, 0–4
 window.DEFAULT_STYLE = {
@@ -38,6 +44,10 @@ window.DEFAULT_STYLE = {
   sheen: null,
   dots: null,
   ribbons: null,
+  shells: null,
+  pattern: null,
+  paper: null,
+  vignette: 0,
   grain: 0,
   bloom: 0,
 };
@@ -63,24 +73,32 @@ window.GLOBE_STYLES = {
     mask: { color: '#000000', alpha: 0.3 },
   },
 
-  // After a navy architectural-blueprint annual-report cover: flat navy, thin white linework, faint relief.
+  // After a navy architectural-blueprint annual-report cover: flat navy, thin white linework, faint relief,
+  // on mottled cyanotype paper with a fine drafting grid and drafting arcs above the horizon.
   blueprint: {
     name: 'Blueprint',
-    imagery: { layer: 'day', saturation: 0, brightness: 1.3, contrast: 1.5, alpha: 0.16 },
+    imagery: { layer: 'day', saturation: 0, brightness: 1.3, contrast: 1.6, alpha: 0.2 },
     globeColor: '#2d4d84',
     background: '#24416f',
     outline: { color: '#ffffff', width: 3, glow: 0 },
     borders: { color: 'rgba(255,255,255,0.55)', width: 1 },
-    graticule: { step: 5, color: 'rgba(255,255,255,0.2)', width: 1 },
+    graticule: [
+      { step: 1, color: 'rgba(255,255,255,0.06)', width: 1 },
+      { step: 5, color: 'rgba(255,255,255,0.22)', width: 1 },
+    ],
     mask: { color: '#1d365f', alpha: 0.2 },
     limb: { color: '#ffffff', width: 1.5 },
+    shells: { color: '#ffffff', alpha: 0, count: 3, spacing: 0.07, edge: 0.3 },
+    paper: { amount: 0.09, scale: 3 },
+    vignette: 0.35,
     grain: 0.05,
   },
 
-  // After a deep ultramarine government-report cover: glowing electric blue, glassy light, hairline strokes.
+  // After a deep ultramarine government-report cover: glowing electric blue, overlapping glass layers,
+  // hairline strokes and a faint interlaced-circle pattern.
   ultramarine: {
     name: 'Ultramarine',
-    imagery: { layer: 'night', saturation: 0, brightness: 1.5, contrast: 1.2, alpha: 0.6 },
+    imagery: { layer: 'night', saturation: 0, brightness: 1.5, contrast: 1.2, alpha: 0.6, relief: 0.12 },
     globeColor: '#2a36ff',
     background: ['#16249a', '#050b33'],
     outline: { color: 'rgba(230,234,255,0.9)', width: 1.5, glow: 0 },
@@ -89,11 +107,16 @@ window.GLOBE_STYLES = {
     mask: { color: '#070d55', alpha: 0.35 },
     limb: { color: 'rgba(210,218,255,0.7)', width: 1, glow: 60 },
     sheen: { color: '#8f9cff', alpha: 0.3 },
+    shells: { color: '#6f7dff', alpha: 0.16, count: 4, spacing: 0.06, edge: 0.35 },
+    pattern: { color: '#a3adff', alpha: 0.11, scale: 5 },
+    paper: { amount: 0.07, scale: 1.5 },
+    vignette: 0.4,
     grain: 0.015,
     bloom: 0.5,
   },
 
-  // After a cornflower-blue research-report cover: flat periwinkle, dot-matrix texture, flowing ribbons of hairlines.
+  // After a cornflower-blue research-report cover: flat periwinkle, dot-matrix texture,
+  // twisting ribbons of hairlines wrapped around the horizon.
   halftone: {
     name: 'Halftone ribbons',
     globeColor: '#3a56a4',
@@ -101,7 +124,7 @@ window.GLOBE_STYLES = {
     outline: { color: 'rgba(240,242,255,1)', width: 2, glow: 0 },
     borders: { color: 'rgba(214,220,250,0.3)', width: 1 },
     dots: { color: '#cfd5f5', alpha: 0.5, size: 1.5, spacing: 14, lights: 0.6 },
-    ribbons: { color: '#dfe3fb', alpha: 0.45, density: 32, overGlobe: 0.35 },
+    ribbons: { color: '#dfe3fb', alpha: 0.55, density: 22, overGlobe: 0 },
     limb: { color: 'rgba(225,230,255,0.8)', width: 1 },
   },
 };
