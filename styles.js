@@ -21,6 +21,7 @@
 // graticule   lat/lon grid: { step (degrees), color, width }, a list of up to 3 of those (e.g. fine + bold), or null
 // gridOpacity multiplies the grid's opacity, 1 = as specified
 // showGrid    whether the grid starts switched on (the "Lat/long grid" checkbox toggles it)
+// gridRegions per-area grid multipliers: { california, land, ocean }, each { opacity, width } (1 = as specified)
 // mask        tint over everything outside California: { color, alpha }
 // limb        line drawn along the edge of the globe: { color, width, glow (soft halo radius in px, 0 = none) } or null
 // sheen       diagonal light across the globe, brightest top-left: { color, alpha } or null
@@ -59,6 +60,7 @@ window.DEFAULT_STYLE = {
   graticule: null,
   gridOpacity: 1,
   showGrid: true,
+  gridRegions: { california: { opacity: 1, width: 1 }, land: { opacity: 1, width: 1 }, ocean: { opacity: 1, width: 1 } },
   mask: { color: '#000000', alpha: 0 },
   limb: null,
   sheen: null,
@@ -137,22 +139,27 @@ window.GLOBE_STYLES = {
     bloom: 0.5,
   },
 
-  // After a cornflower-blue research-report cover: flat periwinkle, dot-matrix texture,
-  // a field of hairlines following the horizon, packed tight at the horizon and opening up into space.
+  // After a cornflower-blue research-report cover: flat periwinkle, a fine lat/long grid, and a field
+  // of hairlines following the horizon, packed tight at the horizon and opening up into space.
+  // Defaults tuned in the tool; dots start off, with their previous settings kept for the Dots toggle.
   halftone: {
     name: 'Halftone',
     globeColor: '#3a56a4',
-    fills: { ocean: '#3a56a4', land: '#3a56a4', california: '#3a56a4', oceanTone: 1, landTone: 1, californiaTone: 1 },
+    fills: { ocean: '#3a56a4', land: '#3a56a4', california: '#3a56a4', oceanTone: 0.77, landTone: 0.94, californiaTone: 1 },
     background: ['#4867b6', '#3f5dab'],
-    outline: { color: 'rgba(240,242,255,1)', width: 2, glow: 0 },
-    borders: { color: 'rgba(214,220,250,0.3)', width: 1 },
+    outline: { color: 'rgba(240,242,255,1)', width: 1.5, glow: 0 },
+    borders: { color: 'rgba(214,220,250,0.59)', width: 1.25 },
     graticule: [
       { step: 1, color: 'rgba(223,227,251,0.07)', width: 1 },
       { step: 5, color: 'rgba(223,227,251,0.28)', width: 1 },
     ],
-    showGrid: false,
-    dots: { color: '#cfd5f5', alpha: 0.5, outsideAlpha: 0.5, size: 1.5, outsideSize: 1.5, spacing: 11, outsideSpacing: 22, lights: 0.6, outsideLights: 0.6 },
+    gridOpacity: 1,
+    showGrid: true,
+    dots: null,
+    _stash: { dots: { color: '#cfd5f5', alpha: 0.5, outsideAlpha: 0.5, size: 1.5, outsideSize: 1.5, spacing: 11, outsideSpacing: 22, lights: 0.6, outsideLights: 0.6 } },
     horizonLines: { color: '#dfe3fb', alpha: 0.5, count: 130, extent: 0.45, growth: 60, glow: 1.2, glowHeight: 0.04, overGlobe: 0 },
     limb: { color: 'rgba(225,230,255,0.8)', width: 1 },
+    paper: { amount: 0, scale: 0.5 },
+    grain: 0.165,
   },
 };
