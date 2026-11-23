@@ -88,8 +88,18 @@
         <option value="4/5">4 : 5</option>
         <option value="1/1">Square</option>
         <option value="16/9">16 : 9</option>
+        <option value="custom">Custom</option>
       </select>
     </label>
+    <div class="row"><span>Ratio W : H</span>
+      <span style="grid-column: span 2; display:flex; gap:6px; align-items:center">
+        <input type="number" id="ratioW" min="0.1" step="any" style="flex:1; min-width:0"> :
+        <input type="number" id="ratioH" min="0.1" step="any" style="flex:1; min-width:0">
+      </span>
+    </div>
+    <div id="frameSliders"></div>
+    <div class="btns"><button id="fitGlobe">Fit whole globe</button></div>
+    <p class="hint" style="margin-top:6px">Frame size widens or narrows the view from the same camera, so the perspective stays the same and only the crop changes.</p>
     <label class="check"><input type="checkbox" id="guides"> Masthead + thirds guides</label>
 
     <h2>Export</h2>
@@ -110,7 +120,7 @@ const C = Cesium;
 const rad = C.Math.toRadians, deg = C.Math.toDegrees;
 
 // All camera state lives here; the camera is always derived from it.
-const s = { lat: 37.0, lon: -119.4, range: 1900, heading: -12, pitch: -32, roll: 0, fov: 55 };
+const s = { lat: 37.0, lon: -119.4, range: 1900, heading: -12, pitch: -32, roll: 0, fov: 55, frameScale: 1 };
 
 const PRESETS = {
   'From the south': { lat: 37.0, lon: -119.4, range: 1900, heading: -12, pitch: -32, roll: 0, fov: 55 },
@@ -702,8 +712,11 @@ async function renderTextures() {
   }
 }
 
+// Frame size scales the view's extent around its centre: same camera, wider or tighter crop
+const MAX_FOV = rad(175);
+const frameFov = () => 2 * Math.atan(Math.min(Math.tan(MAX_FOV / 2), (s.frameScale ?? 1) * Math.tan(rad(s.fov) / 2)));
 function applyCamera() {
-  camera.frustum.fov = rad(s.fov);
+  camera.frustum.fov = frameFov();
   camera.lookAt(C.Cartesian3.fromDegrees(s.lon, s.lat, 0), new C.HeadingPitchRange(rad(s.heading), rad(s.pitch), s.range * 1000));
   camera.twistRight(rad(s.roll));
   updateReadout();
@@ -727,7 +740,7 @@ Altitude         ${h.toFixed(0)} km
 Heading          ${v.heading.toFixed(1)}°
 Tilt (GE)        ${(90 + v.pitch).toFixed(1)}°   (pitch ${v.pitch.toFixed(1)}°)
 Roll             ${v.roll.toFixed(1)}°
-Vertical FOV     ${s.fov}°
+Lens FOV         ${s.fov}°   (×${fmt(s.frameScale ?? 1)} frame = ${deg(frameFov()).toFixed(1)}°)
 Horizon          ${horizonKm.toFixed(0)} km away, ${dip.toFixed(1)}° below level`;
 }
 
@@ -775,6 +788,7 @@ sync.push(slider(cam, 'roll', 'Roll', -60, 60, 0.5, applyCamera));
 sync.push(slider(cam, 'fov', 'Lens FOV', 10, 110, 1, applyCamera));
 sync.push(slider(cam, 'lat', 'Target lat', 30, 45, 0.05, applyCamera));
 sync.push(slider(cam, 'lon', 'Target lon', -126, -110, 0.05, applyCamera));
+sync.push(slider(document.getElementById('frameSliders'), 'frameScale', 'Frame size ×', 0.25, 6, 0.01, applyCamera));
 const syncAll = () => sync.forEach(f => f());
 
 // Per-style controls. Each appears only when the current style has that feature (show), reads and
@@ -941,8 +955,15 @@ document.getElementById('outline').onchange = e => { outlineEntities.forEach(en 
 document.getElementById('exportH').oninput = persistSoon;
 document.getElementById('guides').onchange = e => document.getElementById('safe').classList.toggle('on', e.target.checked);
 const aspectSelect = document.getElementById('aspect');
+const ratioW = document.getElementById('ratioW'), ratioH = document.getElementById('ratioH');
+const ratio = () => `${+ratioW.value || 1}/${+ratioH.value || 1}`;
+function setRatio(value) {
+  [ratioW.value, ratioH.value] = value.split('/');
+  aspectSelect.value = [...aspectSelect.options].some(o => o.value === value) ? value : 'custom';
+  fitFrame();
+}
 function fitFrame() {
-  const [w, h] = aspectSelect.value.split('/').map(Number), a = w / h;
+  const [w, h] = ratio().split('/').map(Number), a = w / h;
   const stage = document.querySelector('.stage');
   let fw = stage.clientWidth, fh = fw / a;
   if (window.innerWidth > 760 && fh > stage.clientHeight) { fh = stage.clientHeight; fw = fh * a; }
@@ -950,7 +971,55 @@ function fitFrame() {
   frame.style.width = fw + 'px';
   frame.style.height = fh + 'px';
 }
-aspectSelect.onchange = () => { fitFrame(); persistSoon(); };
+aspectSelect.onchange = () => { if (aspectSelect.value !== 'custom') setRatio(aspectSelect.value); persistSoon(); };
+for (const input of [ratioW, ratioH]) input.oninput = () => { if (+input.value > 0) { setRatio(ratio()); persistSoon(); } };
+setRatio(aspectSelect.value);
+
+// Frame size needed to show the globe's whole disc (with a small margin) from the current camera,
+// or Infinity when part of the globe is behind the camera
+function globeFitScale() {
+  const pos = camera.positionWC, R = 6378137 * 1.01;
+  const toCenter = C.Cartesian3.negate(pos, new C.Cartesian3()), d = C.Cartesian3.magnitude(toCenter);
+  const c = C.Cartesian3.normalize(toCenter, new C.Cartesian3()), alpha = Math.asin(Math.min(1, R / d));
+  const u1 = C.Cartesian3.normalize(C.Cartesian3.cross(c, camera.upWC, new C.Cartesian3()), new C.Cartesian3());
+  const u2 = C.Cartesian3.cross(c, u1, new C.Cartesian3());
+  const v = new C.Cartesian3(), a1 = new C.Cartesian3(), a2 = new C.Cartesian3();
+  let tx = 0, ty = 0;
+  for (let i = 0; i < 360; i++) {
+    C.Cartesian3.multiplyByScalar(u1, Math.cos(rad(i)) * Math.sin(alpha), a1);
+    C.Cartesian3.multiplyByScalar(u2, Math.sin(rad(i)) * Math.sin(alpha), a2);
+    C.Cartesian3.add(C.Cartesian3.add(a1, a2, v), C.Cartesian3.multiplyByScalar(c, Math.cos(alpha), a1), v);
+    const z = C.Cartesian3.dot(v, camera.directionWC);
+    if (z < 0.02) return Infinity;
+    tx = Math.max(tx, Math.abs(C.Cartesian3.dot(v, camera.rightWC) / z));
+    ty = Math.max(ty, Math.abs(C.Cartesian3.dot(v, camera.upWC) / z));
+  }
+  // Cesium's fov is the angle across the frame's longer side
+  const a = canvas.clientWidth / canvas.clientHeight, T = Math.tan(rad(s.fov) / 2);
+  return Math.max(tx / (a > 1 ? T : T * a), ty / (a > 1 ? T / a : T)) * 1.03;
+}
+// Widen the frame if that's enough (same camera, same perspective). If the globe can't fit from
+// here, back the camera away along its line of sight, keeping tilt, heading and lens, until it fits.
+document.getElementById('fitGlobe').onclick = () => {
+  const maxScale = Math.tan(rad(70)) / Math.tan(rad(s.fov) / 2); // beyond ~140° the edges stretch badly
+  const k = globeFitScale();
+  if (k <= maxScale) {
+    s.frameScale = +k.toFixed(2);
+    status(`Frame size ×${fmt(s.frameScale)} fits the whole globe from the same camera.`);
+  } else {
+    const from = s.range;
+    s.frameScale = 1;
+    let lo = s.range, hi = 200000;
+    for (let i = 0; i < 40; i++) {
+      s.range = (lo + hi) / 2;
+      applyCamera();
+      if (globeFitScale() <= 1) hi = s.range; else lo = s.range;
+    }
+    s.range = Math.round(hi);
+    status(`From ${fmt(from)} km part of the globe is behind the camera, so the camera moved back to ${fmt(s.range)} km (same tilt, heading and lens).`);
+  }
+  syncAll(); applyCamera();
+};
 window.addEventListener('resize', fitFrame);
 fitFrame();
 viewer.resize();
@@ -1035,7 +1104,7 @@ function persistSoon() {
   persistTimer = setTimeout(() => {
     saved.styles[styleKey] = style;
     Object.assign(saved, {
-      styleKey, camera: { ...s }, aspect: aspectSelect.value,
+      styleKey, camera: { ...s }, aspect: ratio(),
       exportH: document.getElementById('exportH').value, outline: document.getElementById('outline').checked,
     });
     try { localStorage.setItem(SAVE_KEY, JSON.stringify(saved)); } catch {}
@@ -1052,7 +1121,7 @@ function withDefaults(def, val) {
 }
 
 if (saved.camera) Object.assign(s, saved.camera);
-if (saved.aspect) { aspectSelect.value = saved.aspect; fitFrame(); }
+if (saved.aspect) setRatio(saved.aspect);
 if (saved.exportH) document.getElementById('exportH').value = saved.exportH;
 if (saved.outline === false) document.getElementById('outline').checked = false;
 if (GLOBE_STYLES[saved.styleKey]) styleSelect.value = saved.styleKey;
