@@ -17,6 +17,10 @@
 // mask        tint over everything outside California: { color, alpha }
 // limb        line drawn along the edge of the globe: { color, width, glow (soft halo radius in px, 0 = none) } or null
 // sheen       diagonal light across the globe, brightest top-left: { color, alpha } or null
+// dots        dot-matrix land, dots grow where NASA night lights are bright (western hemisphere only):
+//               { color, alpha, size (px), spacing (km between dots), lights (0 = uniform dots, 1 = full city boost) } or null
+// ribbons     flowing bands of fine lines across the frame:
+//               { color, alpha, density (lines per band), overGlobe (0–1 strength over the globe vs. space) } or null
 // grain       film/paper noise, 0–0.2
 // bloom       glow around bright areas, 0–4
 window.DEFAULT_STYLE = {
@@ -32,6 +36,8 @@ window.DEFAULT_STYLE = {
   mask: { color: '#000000', alpha: 0 },
   limb: null,
   sheen: null,
+  dots: null,
+  ribbons: null,
   grain: 0,
   bloom: 0,
 };
@@ -85,5 +91,17 @@ window.GLOBE_STYLES = {
     sheen: { color: '#8f9cff', alpha: 0.3 },
     grain: 0.015,
     bloom: 0.5,
+  },
+
+  // After a cornflower-blue research-report cover: flat periwinkle, dot-matrix texture, flowing ribbons of hairlines.
+  halftone: {
+    name: 'Halftone ribbons',
+    globeColor: '#3a56a4',
+    background: ['#4867b6', '#3f5dab'],
+    outline: { color: 'rgba(240,242,255,1)', width: 2, glow: 0 },
+    borders: { color: 'rgba(214,220,250,0.3)', width: 1 },
+    dots: { color: '#cfd5f5', alpha: 0.5, size: 1.5, spacing: 14, lights: 0.6 },
+    ribbons: { color: '#dfe3fb', alpha: 0.45, density: 32, overGlobe: 0.35 },
+    limb: { color: 'rgba(225,230,255,0.8)', width: 1 },
   },
 };

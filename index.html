@@ -14,8 +14,8 @@
   * { box-sizing: border-box; }
   html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:13px/1.4 -apple-system, system-ui, sans-serif; }
   .app { display:flex; height:100%; gap:16px; padding:16px; }
-  .stage { flex:1; display:flex; align-items:center; justify-content:center; min-width:0; }
-  #frame { height:100%; max-width:100%; aspect-ratio: 8.5 / 11; position:relative; box-shadow:0 0 0 1px #333; }
+  .stage { flex:1; display:flex; align-items:center; justify-content:center; min-width:0; min-height:0; }
+  #frame { flex:none; position:relative; box-shadow:0 0 0 1px #333; } /* sized in JS to keep the page aspect */
   #globe { position:absolute; inset:0; }
   #globe .cesium-viewer-bottom { display:none; }
   .safe { position:absolute; inset:0; pointer-events:none; display:none; }
@@ -37,7 +37,7 @@
   .check { display:flex; align-items:center; gap:6px; margin:4px 0; }
   pre { background:#121214; border:1px solid var(--line); border-radius:5px; padding:8px; font-size:11px; white-space:pre-wrap; margin:6px 0; color:#cfcac0; }
   #status { color:var(--muted); font-size:12px; margin-top:6px; min-height:1em; }
-  @media (max-width: 760px) { .app { flex-direction:column; height:auto; } #frame { height:auto; width:100%; } aside { width:100%; } }
+  @media (max-width: 760px) { .app { flex-direction:column; height:auto; } aside { width:100%; } }
 </style>
 </head>
 <body>
@@ -170,7 +170,82 @@ const dataReady = Promise.all([
   const stateBorders = topojson.mesh(us, us.objects.states, (a, b) => a !== b).coordinates;
   const worldLines = topojson.mesh(world, world.objects.countries).coordinates;
   lineSets.borders = [...stateBorders, ...worldLines].map(toPositions);
+  landGeo = topojson.feature(world, world.objects.land);
 });
+
+// Dot-matrix land: a staggered grid of dots over land, larger where NASA night lights are bright.
+// Land and lights are rasterised once into equirectangular grids covering this region.
+const REGION = { w: -175, e: -45, s: 5, n: 80, res: 0.05 };
+const RW = Math.round((REGION.e - REGION.w) / REGION.res), RH = Math.round((REGION.n - REGION.s) / REGION.res);
+let landGeo, landMask, lightGrid;
+
+function rasterLand() {
+  const cv = document.createElement('canvas');
+  cv.width = RW; cv.height = RH;
+  const g = cv.getContext('2d');
+  g.beginPath();
+  for (const poly of landGeo.features.flatMap(f => f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates)) {
+    for (const ring of poly) {
+      ring.forEach(([x, y], i) => g[i ? 'lineTo' : 'moveTo']((x - REGION.w) / REGION.res, (REGION.n - y) / REGION.res));
+      g.closePath();
+    }
+  }
+  g.fill('evenodd');
+  const px = g.getImageData(0, 0, RW, RH).data;
+  const mask = new Uint8Array(RW * RH);
+  for (let i = 0; i < mask.length; i++) mask[i] = px[i * 4 + 3] > 127;
+  return mask;
+}
+
+async function loadLights() {
+  // Half resolution (~11 km/px) is plenty for 14 km dot spacing and is a 70 KB download instead of 3 MB
+  const url = 'https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.3.0'
+    + `&LAYERS=VIIRS_Black_Marble&STYLES=&CRS=EPSG:4326&BBOX=${REGION.s},${REGION.w},${REGION.n},${REGION.e}`
+    + `&WIDTH=${RW / 2}&HEIGHT=${RH / 2}&FORMAT=image/jpeg&TIME=2016-01-01`;
+  const img = await createImageBitmap(await (await fetch(url)).blob());
+  const cv = document.createElement('canvas');
+  cv.width = RW; cv.height = RH;
+  const g = cv.getContext('2d');
+  g.drawImage(img, 0, 0, RW, RH);
+  const px = g.getImageData(0, 0, RW, RH).data;
+  const grid = new Uint8Array(RW * RH);
+  for (let i = 0; i < grid.length; i++) grid[i] = Math.max(px[i * 4], px[i * 4 + 1], px[i * 4 + 2]);
+  return grid;
+}
+
+let dotPrims = null, dotToken = 0;
+async function setDots(spec) {
+  const token = ++dotToken;
+  if (dotPrims) scene.primitives.remove(dotPrims);
+  dotPrims = null;
+  if (!spec || !landGeo) return;
+  landMask ||= rasterLand();
+  if (spec.lights > 0) lightGrid ||= await loadLights().catch(() => null);
+  if (token !== dotToken) return; // style changed while loading
+
+  const col = new C.PointPrimitiveCollection();
+  const base = css(spec.color);
+  const scale = new C.NearFarScalar(3e5, 1.6, 6e6, 0.35);
+  const dLat = spec.spacing / 111.2;
+  let row = 0;
+  for (let lat = REGION.s; lat < REGION.n; lat += dLat, row++) {
+    const dLon = dLat / Math.cos(rad(lat));
+    for (let lon = REGION.w + (row % 2) * dLon / 2; lon < REGION.e; lon += dLon) {
+      const x = Math.floor((lon - REGION.w) / REGION.res), y = Math.floor((REGION.n - lat) / REGION.res);
+      if (!landMask[y * RW + x]) continue;
+      let light = 0;
+      if (lightGrid) for (let j = -2; j <= 2; j++) for (let i = -2; i <= 2; i++) light = Math.max(light, lightGrid[(y + j) * RW + x + i] || 0);
+      const l = Math.pow(light / 255, 1.5) * spec.lights;
+      col.add({
+        position: C.Cartesian3.fromDegrees(lon, lat, 1500),
+        pixelSize: spec.size * (1 + 1.8 * l),
+        color: base.withAlpha(Math.min(1, spec.alpha * (1 + 1.5 * l))),
+        scaleByDistance: scale,
+      });
+    }
+  }
+  dotPrims = scene.primitives.add(col);
+}
 
 function graticule(step) {
   const lines = [];
@@ -209,9 +284,28 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
     uniform vec4 bgTop;
     uniform vec4 bgBottom;
     uniform vec4 sheenColor;
+    uniform vec4 ribbonColor;
+    uniform float ribbonDensity;
+    uniform float ribbonOverGlobe;
     uniform float grain;
     in vec2 v_textureCoordinates;
     float sky(vec2 uv) { return czm_unpackDepth(texture(depthTexture, uv)) >= 1.0 ? 1.0 : 0.0; }
+
+    // A band of fine parallel lines following a wave; its width pinches and swells,
+    // so the lines bunch together like a twisting ribbon.
+    float ribbon(vec2 p, float base, float amp, float f, float ph, float w, float g, float q) {
+      float c = base + amp * sin(6.2831853 * (f * p.x + ph));
+      float hw = w * (0.12 + 0.88 * abs(sin(6.2831853 * (g * p.x + q))));
+      float v = (p.y - c) / hw;
+      float lineCoord = v * ribbonDensity;
+      // Line width in pixels grows with export resolution so prints match the on-screen (retina) look
+      float fw = fwidth(lineCoord) * max(1.0, czm_pixelRatio * 0.5);
+      float d = abs(fract(lineCoord + 0.5) - 0.5);
+      float line = 1.0 - smoothstep(0.0, fw, d);
+      line = mix(line, 0.55, smoothstep(0.35, 0.9, fw)); // where lines merge, use average coverage
+      return line * step(abs(v), 1.0) * (1.0 - v * v);
+    }
+
     void main() {
       vec2 uv = v_textureCoordinates;
       vec4 c = texture(colorTexture, uv);
@@ -220,6 +314,14 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
       if (sheenColor.a > 0.0 && self < 1.0) {
         float t = clamp((1.0 - uv.x + uv.y) * 0.5, 0.0, 1.0);
         c.rgb += sheenColor.rgb * sheenColor.a * t * t;
+      }
+      if (ribbonColor.a > 0.0) {
+        vec2 p = vec2(uv.x * czm_viewport.z / czm_viewport.w, uv.y);
+        float r = ribbon(p, 0.80, 0.10, 0.9, 0.10, 0.15, 0.7, 0.20)
+                + ribbon(p, 0.58, 0.20, 0.6, 0.60, 0.22, 0.5, 0.75)
+                + ribbon(p, 0.24, 0.14, 1.1, 0.35, 0.12, 0.9, 0.40);
+        float a = clamp(r, 0.0, 1.0) * ribbonColor.a * mix(ribbonOverGlobe, 1.0, self);
+        c.rgb = mix(c.rgb, ribbonColor.rgb, a);
       }
       if (limbGlow > 0.0 && self > 0.0) {
         float halo = 0.0;
@@ -249,7 +351,8 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
       out_FragColor = c;
     }`,
   uniforms: { limbColor: C.Color.WHITE, limbWidth: 0, limbGlow: 0, bgGradient: 0, bgTop: C.Color.BLACK,
-              bgBottom: C.Color.BLACK, sheenColor: C.Color.TRANSPARENT, grain: 0 },
+              bgBottom: C.Color.BLACK, sheenColor: C.Color.TRANSPARENT, ribbonColor: C.Color.TRANSPARENT,
+              ribbonDensity: 40, ribbonOverGlobe: 0.3, grain: 0 },
 }));
 
 function applyStyle(key) {
@@ -277,6 +380,10 @@ function applyStyle(key) {
   fx.uniforms.bgTop = css(bg[0]);
   fx.uniforms.bgBottom = css(bg[bg.length - 1]);
   fx.uniforms.sheenColor = style.sheen ? css(style.sheen.color).withAlpha(style.sheen.alpha) : C.Color.TRANSPARENT;
+  const rb = style.ribbons;
+  fx.uniforms.ribbonColor = rb ? css(rb.color).withAlpha(rb.alpha) : C.Color.TRANSPARENT;
+  fx.uniforms.ribbonDensity = rb?.density ?? 40;
+  fx.uniforms.ribbonOverGlobe = rb?.overGlobe ?? 0.3;
   scene.skyBox.show = style.stars;
   scene.skyAtmosphere.show = style.atmosphere;
   scene.globe.showGroundAtmosphere = style.groundHaze;
@@ -291,6 +398,7 @@ function applyStyle(key) {
   }
   setLines('borders', lineSets.borders, style.borders);
   setLines('graticule', style.graticule ? graticule(style.graticule.step) : [], style.graticule);
+  setDots(style.dots);
 
   fx.uniforms.limbColor = css(style.limb?.color ?? '#ffffff');
   fx.uniforms.limbWidth = style.limb?.width ?? 0;
@@ -378,10 +486,19 @@ for (const [key, st] of Object.entries(GLOBE_STYLES)) styleSelect.add(new Option
 styleSelect.onchange = e => applyStyle(e.target.value);
 document.getElementById('outline').onchange = e => outlineEntities.forEach(en => en.show = e.target.checked);
 document.getElementById('guides').onchange = e => document.getElementById('safe').classList.toggle('on', e.target.checked);
-document.getElementById('aspect').onchange = e => {
-  document.getElementById('frame').style.aspectRatio = e.target.value.replace('/', ' / ');
-  setTimeout(applyCamera, 50);
-};
+const aspectSelect = document.getElementById('aspect');
+function fitFrame() {
+  const [w, h] = aspectSelect.value.split('/').map(Number), a = w / h;
+  const stage = document.querySelector('.stage');
+  let fw = stage.clientWidth, fh = fw / a;
+  if (window.innerWidth > 760 && fh > stage.clientHeight) { fh = stage.clientHeight; fw = fh * a; }
+  const frame = document.getElementById('frame');
+  frame.style.width = fw + 'px';
+  frame.style.height = fh + 'px';
+}
+aspectSelect.onchange = fitFrame;
+window.addEventListener('resize', fitFrame);
+fitFrame();
 
 // Mouse: drag = orbit, shift-drag = move target, alt-drag = roll, wheel = distance
 const canvas = scene.canvas;
@@ -449,7 +566,7 @@ document.getElementById('kmlBtn').onclick = async () => {
   catch { document.getElementById('readout').textContent = kml; status('Clipboard blocked; KML shown below.'); }
 };
 
-window.app = { s, applyCamera, applyStyle, viewer };
+window.app = { s, applyCamera, applyStyle, viewer, state: () => ({ dots: dotPrims?.length, landMask: !!landMask, lights: !!lightGrid }) };
 applyStyle(styleSelect.value); applyCamera();
 dataReady.then(() => applyStyle(styleSelect.value));
 new ResizeObserver(() => applyCamera()).observe(document.getElementById('frame'));
