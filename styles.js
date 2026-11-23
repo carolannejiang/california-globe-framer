@@ -9,12 +9,15 @@
 //   alpha       0–1; below 1 the imagery blends over globeColor (grayscale + low alpha = tinted relief)
 //   colorToAlpha, colorToAlphaThreshold   make one colour see-through, e.g. '#000000' keeps only the city lights
 //   relief      0–1: faint grayscale terrain laid over the imagery, for texture on land
+// detail      map sharpness: 1 = normal, higher loads finer imagery tiles (slower), lower is softer
 // globeColor  colour of the globe surface under the imagery
 // background  colour of space, or [top, bottom] for a vertical gradient
 // stars, atmosphere (blue rim glow), groundHaze (atmospheric haze + fog on the surface)
+// atmosphereBrightness   -1 to 1, brightens or darkens the blue rim glow
 // outline     California outline: color, width (px), glow (0 = flat line, ~0.3 = soft neon)
 // borders     coastlines, country and state borders: { color, width } or null
 // graticule   lat/lon grid: { step (degrees), color, width }, a list of up to 3 of those (e.g. fine + bold), or null
+// gridOpacity multiplies the grid's opacity, 1 = as specified
 // mask        tint over everything outside California: { color, alpha }
 // limb        line drawn along the edge of the globe: { color, width, glow (soft halo radius in px, 0 = none) } or null
 // sheen       diagonal light across the globe, brightest top-left: { color, alpha } or null
@@ -34,14 +37,17 @@
 // bloom       glow around bright areas, 0–4
 window.DEFAULT_STYLE = {
   imagery: null,
+  detail: 1,
   globeColor: '#000000',
   background: '#000000',
   stars: false,
   atmosphere: false,
   groundHaze: false,
+  atmosphereBrightness: 0,
   outline: { color: '#ffffff', width: 2, glow: 0 },
   borders: null,
   graticule: null,
+  gridOpacity: 1,
   mask: { color: '#000000', alpha: 0 },
   limb: null,
   sheen: null,

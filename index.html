@@ -27,7 +27,9 @@
   h1 { font-size:15px; margin:0 0 2px; }
   .hint { color:var(--muted); font-size:12px; margin:0 0 12px; }
   h2 { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:16px 0 6px; }
-  label.row { display:grid; grid-template-columns: 84px 1fr 52px; align-items:center; gap:8px; margin:4px 0; }
+  label.row { display:grid; grid-template-columns: 104px 1fr 44px; align-items:center; gap:8px; margin:4px 0; }
+  details { border-top:1px solid var(--line); padding:4px 0; }
+  details summary { cursor:pointer; font-size:12px; padding:4px 0; }
   label.row output { text-align:right; font-variant-numeric:tabular-nums; color:var(--muted); }
   input[type=range] { width:100%; accent-color:var(--accent); }
   select, button, input[type=number] { background:#26262a; color:var(--fg); border:1px solid #3a3a40; border-radius:5px; padding:5px 8px; font:inherit; }
@@ -69,8 +71,12 @@
     <label class="row">Style
       <select id="style" style="grid-column: span 2"></select>
     </label>
-    <div id="lookSliders"></div>
     <label class="check"><input type="checkbox" id="outline" checked> California outline</label>
+    <div id="lookSliders"></div>
+    <div class="btns" style="margin-top:8px">
+      <button id="resetStyle">Reset style</button>
+      <button id="copyStyle">Copy settings</button>
+    </div>
 
     <h2>Frame</h2>
     <label class="row">Aspect
@@ -102,8 +108,7 @@ const C = Cesium;
 const rad = C.Math.toRadians, deg = C.Math.toDegrees;
 
 // All camera state lives here; the camera is always derived from it.
-const s = { lat: 37.0, lon: -119.4, range: 1900, heading: -12, pitch: -32, roll: 0, fov: 55,
-            brightness: 1.6, contrast: 1.3, mask: 0.45, bloom: 0 };
+const s = { lat: 37.0, lon: -119.4, range: 1900, heading: -12, pitch: -32, roll: 0, fov: 55 };
 
 const PRESETS = {
   'From the south': { lat: 37.0, lon: -119.4, range: 1900, heading: -12, pitch: -32, roll: 0, fov: 55 },
@@ -136,7 +141,7 @@ const layers = {
   day: viewer.imageryLayers.addImageryProvider(gibs('BlueMarble_ShadedRelief_Bathymetry', '2004-08-01', 'jpeg')),
 };
 // Faint grayscale terrain drawn over the main imagery (style.imagery.relief); kept out of `layers`
-// so the brightness/contrast sliders don't touch it
+// so it keeps its own brightness/contrast
 const reliefLayer = viewer.imageryLayers.addImageryProvider(gibs('BlueMarble_ShadedRelief_Bathymetry', '2004-08-01', 'jpeg'));
 Object.assign(reliefLayer, { show: false, saturation: 0, contrast: 1.6, brightness: 1.1 });
 scene.globe.depthTestAgainstTerrain = true; // hide linework on the far side of the globe
@@ -168,7 +173,7 @@ const dataReady = Promise.all([
   const outer = C.Cartesian3.fromDegreesArray([-179, -50, -30, -50, -30, 85, -179, 85]);
   viewer.entities.add({ polygon: {
     hierarchy: new C.PolygonHierarchy(outer, holes), height: 200, arcType: C.ArcType.RHUMB,
-    material: new C.ColorMaterialProperty(new C.CallbackProperty(() => maskColor.withAlpha(s.mask), false)),
+    material: new C.ColorMaterialProperty(new C.CallbackProperty(() => maskColor.withAlpha(style.mask.alpha), false)),
   }});
 
   const stateBorders = topojson.mesh(us, us.objects.states, (a, b) => a !== b).coordinates;
@@ -275,12 +280,13 @@ function graticule(step) {
   return lines.map(toPositions);
 }
 
-function setLines(key, sets, spec) {
+function setLines(key, sets, spec, alphaScale = 1) {
   if (linePrims[key]) scene.primitives.remove(linePrims[key]);
   linePrims[key] = null;
   if (!spec) return;
   const col = new C.PolylineCollection();
-  const material = C.Material.fromType('Color', { color: css(spec.color) });
+  const color = css(spec.color);
+  const material = C.Material.fromType('Color', { color: color.withAlpha(Math.min(1, color.alpha * alphaScale)) });
   for (const positions of sets) col.add({ positions, width: spec.width, material });
   linePrims[key] = scene.primitives.add(col);
 }
@@ -446,11 +452,21 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
   },
 }));
 
+let styleKey;
 function applyStyle(key) {
-  style = { ...DEFAULT_STYLE, ...GLOBE_STYLES[key] };
+  styleKey = key;
+  style = structuredClone({ ...DEFAULT_STYLE, ...GLOBE_STYLES[key] });
+  renderFx(); renderLines(); renderDots();
+  buildStyleControls();
+}
+
+// Cheap, instant settings: imagery, colours, shader uniforms, outline, glow
+function renderFx() {
   const im = style.imagery;
   for (const [name, layer] of Object.entries(layers)) {
     layer.show = !!im && im.layer === name;
+    layer.brightness = im?.brightness ?? 1;
+    layer.contrast = im?.contrast ?? 1;
     layer.saturation = im?.saturation ?? 1;
     layer.hue = C.Math.toRadians(im?.hue ?? 0);
     layer.gamma = im?.gamma ?? 1;
@@ -460,10 +476,7 @@ function applyStyle(key) {
   }
   reliefLayer.show = (im?.relief ?? 0) > 0;
   reliefLayer.alpha = im?.relief ?? 0;
-  s.brightness = im?.brightness ?? 1;
-  s.contrast = im?.contrast ?? 1;
-  s.mask = style.mask.alpha;
-  s.bloom = style.bloom;
+  scene.globe.maximumScreenSpaceError = 2 / (style.detail ?? 1);
   maskColor = css(style.mask.color);
 
   scene.globe.baseColor = css(style.globeColor);
@@ -476,7 +489,7 @@ function applyStyle(key) {
   const hl = style.horizonLines;
   fx.uniforms.lineColor = hl ? css(hl.color).withAlpha(hl.alpha) : C.Color.TRANSPARENT;
   // Geometric spacing: `count` lines spanning `extent`, with the last gap `growth` times the first
-  const count = hl?.count ?? 130, ratio = Math.pow(hl?.growth ?? 10, 1 / (count - 1));
+  const count = Math.max(2, hl?.count ?? 130), ratio = Math.pow(Math.max(1.001, hl?.growth ?? 10), 1 / (count - 1));
   fx.uniforms.lineCount = count;
   fx.uniforms.lineRatio = ratio;
   fx.uniforms.lineFirst = (hl?.extent ?? 0.5) * (ratio - 1) / (Math.pow(ratio, count) - 1);
@@ -491,8 +504,14 @@ function applyStyle(key) {
   fx.uniforms.paper = style.paper?.amount ?? 0;
   fx.uniforms.paperScale = style.paper?.scale ?? 4;
   fx.uniforms.vignette = style.vignette;
+  fx.uniforms.limbColor = css(style.limb?.color ?? '#ffffff');
+  fx.uniforms.limbWidth = style.limb?.width ?? 0;
+  fx.uniforms.limbGlow = style.limb?.glow ?? 0;
+  fx.uniforms.grain = style.grain;
+
   scene.skyBox.show = style.stars;
   scene.skyAtmosphere.show = style.atmosphere;
+  scene.skyAtmosphere.brightnessShift = style.atmosphereBrightness ?? 0;
   scene.globe.showGroundAtmosphere = style.groundHaze;
   scene.fog.enabled = style.groundHaze;
 
@@ -503,36 +522,30 @@ function applyStyle(key) {
       ? new C.PolylineGlowMaterialProperty({ glowPower: o.glow, color: css(o.color) })
       : new C.ColorMaterialProperty(css(o.color));
   }
+
+  const bloom = scene.postProcessStages.bloom;
+  bloom.enabled = style.bloom > 0;
+  bloom.uniforms.glowOnly = false;
+  bloom.uniforms.contrast = 128;
+  bloom.uniforms.brightness = -0.3 + style.bloom * 0.25;
+  bloom.uniforms.delta = 1;
+  bloom.uniforms.sigma = 2 + style.bloom * 2;
+  bloom.uniforms.stepSize = 1;
+}
+
+// These rebuild geometry, so sliders call them debounced
+function renderLines() {
   setLines('borders', lineSets.borders, style.borders);
   const grids = [].concat(style.graticule || []);
-  for (let i = 0; i < 3; i++) setLines('graticule' + i, grids[i] ? graticule(grids[i].step) : [], grids[i]);
-  setDots(style.dots);
-
-  fx.uniforms.limbColor = css(style.limb?.color ?? '#ffffff');
-  fx.uniforms.limbWidth = style.limb?.width ?? 0;
-  fx.uniforms.limbGlow = style.limb?.glow ?? 0;
-  fx.uniforms.grain = style.grain;
-
-  syncAll(); applyLook();
+  for (let i = 0; i < 3; i++) setLines('graticule' + i, grids[i] ? graticule(grids[i].step) : [], grids[i], style.gridOpacity ?? 1);
 }
+function renderDots() { setDots(style.dots); }
 
 function applyCamera() {
   camera.frustum.fov = rad(s.fov);
   camera.lookAt(C.Cartesian3.fromDegrees(s.lon, s.lat, 0), new C.HeadingPitchRange(rad(s.heading), rad(s.pitch), s.range * 1000));
   camera.twistRight(rad(s.roll));
   updateReadout();
-}
-
-function applyLook() {
-  for (const l of Object.values(layers)) { l.brightness = s.brightness; l.contrast = s.contrast; }
-  const bloom = scene.postProcessStages.bloom;
-  bloom.enabled = s.bloom > 0;
-  bloom.uniforms.glowOnly = false;
-  bloom.uniforms.contrast = 128;
-  bloom.uniforms.brightness = -0.3 + s.bloom * 0.25;
-  bloom.uniforms.delta = 1;
-  bloom.uniforms.sigma = 2 + s.bloom * 2;
-  bloom.uniforms.stepSize = 1;
 }
 
 function cameraView() {
@@ -575,11 +588,88 @@ sync.push(slider(cam, 'roll', 'Roll', -60, 60, 0.5, applyCamera));
 sync.push(slider(cam, 'fov', 'Lens FOV', 10, 110, 1, applyCamera));
 sync.push(slider(cam, 'lat', 'Target lat', 30, 45, 0.05, applyCamera));
 sync.push(slider(cam, 'lon', 'Target lon', -126, -110, 0.05, applyCamera));
-sync.push(slider(look, 'brightness', 'Brightness', 0.3, 4, 0.05, applyLook));
-sync.push(slider(look, 'contrast', 'Contrast', 0.5, 3, 0.05, applyLook));
-sync.push(slider(look, 'mask', 'Dim outside', 0, 0.95, 0.01, () => {}));
-sync.push(slider(look, 'bloom', 'City glow', 0, 4, 0.1, applyLook));
 const syncAll = () => sync.forEach(f => f());
+
+// Per-style controls. Each appears only when the current style has that feature (show), reads and
+// writes the live style object (get/set), and redraws only what it affects (part; default = instant).
+const alphaOf = c => css(c).alpha;
+const withAlpha = (c, a) => css(c).withAlpha(a).toCssColorString();
+const has = k => st => !!st[k];
+const CONTROLS = [
+  { group: 'Map', label: 'Brightness', min: 0.2, max: 4, step: 0.05, show: has('imagery'), get: st => st.imagery.brightness ?? 1, set: (st, v) => st.imagery.brightness = v },
+  { group: 'Map', label: 'Contrast', min: 0.3, max: 3, step: 0.05, show: has('imagery'), get: st => st.imagery.contrast ?? 1, set: (st, v) => st.imagery.contrast = v },
+  { group: 'Map', label: 'Saturation', min: 0, max: 2, step: 0.05, show: has('imagery'), get: st => st.imagery.saturation ?? 1, set: (st, v) => st.imagery.saturation = v },
+  { group: 'Map', label: 'Imagery strength', min: 0, max: 1, step: 0.01, show: has('imagery'), get: st => st.imagery.alpha ?? 1, set: (st, v) => st.imagery.alpha = v },
+  { group: 'Map', label: 'Terrain texture', min: 0, max: 0.6, step: 0.01, show: has('imagery'), get: st => st.imagery.relief ?? 0, set: (st, v) => st.imagery.relief = v },
+  { group: 'Map', label: 'Map detail', min: 0.5, max: 3, step: 0.25, show: has('imagery'), get: st => st.detail ?? 1, set: (st, v) => st.detail = v },
+
+  { group: 'Glow & atmosphere', label: 'City glow', min: 0, max: 4, step: 0.1, show: st => !!st.imagery || !!st.dots, get: st => st.bloom, set: (st, v) => st.bloom = v },
+  { group: 'Glow & atmosphere', label: 'Atmosphere', min: -1, max: 1, step: 0.05, show: has('atmosphere'), get: st => st.atmosphereBrightness ?? 0, set: (st, v) => st.atmosphereBrightness = v },
+  { group: 'Glow & atmosphere', label: 'Dim outside CA', min: 0, max: 0.95, step: 0.01, get: st => st.mask.alpha, set: (st, v) => st.mask.alpha = v },
+  { group: 'Glow & atmosphere', label: 'Edge halo', min: 0, max: 150, step: 1, show: has('limb'), get: st => st.limb.glow ?? 0, set: (st, v) => st.limb.glow = v },
+  { group: 'Glow & atmosphere', label: 'Edge line', min: 0, max: 5, step: 0.25, show: has('limb'), get: st => st.limb.width ?? 0, set: (st, v) => st.limb.width = v },
+  { group: 'Glow & atmosphere', label: 'Sheen', min: 0, max: 0.8, step: 0.01, show: has('sheen'), get: st => st.sheen.alpha, set: (st, v) => st.sheen.alpha = v },
+
+  { group: 'Linework', label: 'Outline width', min: 0.5, max: 10, step: 0.25, get: st => st.outline.width, set: (st, v) => st.outline.width = v },
+  { group: 'Linework', label: 'Outline glow', min: 0, max: 0.6, step: 0.01, get: st => st.outline.glow, set: (st, v) => st.outline.glow = v },
+  { group: 'Linework', label: 'Borders', min: 0, max: 1, step: 0.01, show: has('borders'), part: 'lines', get: st => alphaOf(st.borders.color), set: (st, v) => st.borders.color = withAlpha(st.borders.color, v) },
+  { group: 'Linework', label: 'Border width', min: 0.5, max: 4, step: 0.25, show: has('borders'), part: 'lines', get: st => st.borders.width, set: (st, v) => st.borders.width = v },
+  { group: 'Linework', label: 'Grid strength', min: 0, max: 3, step: 0.05, show: has('graticule'), part: 'lines', get: st => st.gridOpacity ?? 1, set: (st, v) => st.gridOpacity = v },
+
+  { group: 'Dots', label: 'Dot size', min: 0.5, max: 6, step: 0.1, show: has('dots'), part: 'dots', get: st => st.dots.size, set: (st, v) => st.dots.size = v },
+  { group: 'Dots', label: 'Dot brightness', min: 0.05, max: 1, step: 0.01, show: has('dots'), part: 'dots', get: st => st.dots.alpha, set: (st, v) => st.dots.alpha = v },
+  { group: 'Dots', label: 'CA dot gap km', min: 5, max: 40, step: 1, show: has('dots'), part: 'dots', get: st => st.dots.spacing, set: (st, v) => st.dots.spacing = v },
+  { group: 'Dots', label: 'Other gap km', min: 10, max: 60, step: 1, show: has('dots'), part: 'dots', get: st => st.dots.outsideSpacing ?? st.dots.spacing, set: (st, v) => st.dots.outsideSpacing = v },
+  { group: 'Dots', label: 'City boost', min: 0, max: 2, step: 0.05, show: has('dots'), part: 'dots', get: st => st.dots.lights, set: (st, v) => st.dots.lights = v },
+
+  { group: 'Horizon lines', label: 'Line count', min: 10, max: 300, step: 1, show: has('horizonLines'), get: st => st.horizonLines.count, set: (st, v) => st.horizonLines.count = v },
+  { group: 'Horizon lines', label: 'Gap growth ×', min: 1, max: 200, step: 1, show: has('horizonLines'), get: st => st.horizonLines.growth ?? 10, set: (st, v) => st.horizonLines.growth = v },
+  { group: 'Horizon lines', label: 'Field height', min: 0.05, max: 1, step: 0.01, show: has('horizonLines'), get: st => st.horizonLines.extent, set: (st, v) => st.horizonLines.extent = v },
+  { group: 'Horizon lines', label: 'Line brightness', min: 0, max: 1, step: 0.01, show: has('horizonLines'), get: st => st.horizonLines.alpha, set: (st, v) => st.horizonLines.alpha = v },
+
+  { group: 'Horizon layers', label: 'Layers', min: 0, max: 10, step: 1, show: has('shells'), get: st => st.shells.count, set: (st, v) => st.shells.count = v },
+  { group: 'Horizon layers', label: 'Layer spacing', min: 0.01, max: 0.2, step: 0.005, show: has('shells'), get: st => st.shells.spacing, set: (st, v) => st.shells.spacing = v },
+  { group: 'Horizon layers', label: 'Layer fill', min: 0, max: 0.5, step: 0.01, show: has('shells'), get: st => st.shells.alpha, set: (st, v) => st.shells.alpha = v },
+  { group: 'Horizon layers', label: 'Layer edges', min: 0, max: 1, step: 0.01, show: has('shells'), get: st => st.shells.edge, set: (st, v) => st.shells.edge = v },
+
+  { group: 'Texture', label: 'Circle pattern', min: 0, max: 0.4, step: 0.005, show: has('pattern'), get: st => st.pattern.alpha, set: (st, v) => st.pattern.alpha = v },
+  { group: 'Texture', label: 'Pattern scale', min: 1, max: 20, step: 0.5, show: has('pattern'), get: st => st.pattern.scale, set: (st, v) => st.pattern.scale = v },
+  { group: 'Texture', label: 'Paper mottling', min: 0, max: 0.25, step: 0.005, get: st => st.paper?.amount ?? 0, set: (st, v) => st.paper = { scale: 3, ...st.paper, amount: v } },
+  { group: 'Texture', label: 'Mottling scale', min: 0.5, max: 12, step: 0.25, get: st => st.paper?.scale ?? 3, set: (st, v) => st.paper = { amount: 0, ...st.paper, scale: v } },
+  { group: 'Texture', label: 'Vignette', min: 0, max: 1, step: 0.01, get: st => st.vignette, set: (st, v) => st.vignette = v },
+  { group: 'Texture', label: 'Grain', min: 0, max: 0.2, step: 0.005, get: st => st.grain, set: (st, v) => st.grain = v },
+];
+
+const debounced = (fn, ms) => { let t; return () => { clearTimeout(t); t = setTimeout(fn, ms); }; };
+const redraw = { lines: debounced(renderLines, 200), dots: debounced(renderDots, 250) };
+const fmt = v => String(+(+v).toFixed(3));
+
+function buildStyleControls() {
+  look.innerHTML = '';
+  const groups = new Map();
+  for (const ctl of CONTROLS) {
+    if (ctl.show && !ctl.show(style)) continue;
+    if (!groups.has(ctl.group)) {
+      const d = document.createElement('details');
+      d.open = true;
+      d.innerHTML = `<summary>${ctl.group}</summary>`;
+      look.appendChild(d);
+      groups.set(ctl.group, d);
+    }
+    const row = document.createElement('label');
+    row.className = 'row';
+    row.innerHTML = `${ctl.label}<input type="range" min="${ctl.min}" max="${ctl.max}" step="${ctl.step}"><output></output>`;
+    const input = row.querySelector('input'), out = row.querySelector('output');
+    input.value = ctl.get(style);
+    out.textContent = fmt(ctl.get(style));
+    input.addEventListener('input', () => {
+      ctl.set(style, +input.value);
+      out.textContent = fmt(input.value);
+      if (ctl.part) redraw[ctl.part](); else renderFx();
+    });
+    groups.get(ctl.group).appendChild(row);
+  }
+}
 
 const presetBox = document.getElementById('presets');
 for (const [name, p] of Object.entries(PRESETS)) {
@@ -592,6 +682,12 @@ for (const [name, p] of Object.entries(PRESETS)) {
 const styleSelect = document.getElementById('style');
 for (const [key, st] of Object.entries(GLOBE_STYLES)) styleSelect.add(new Option(st.name || key, key));
 styleSelect.onchange = e => applyStyle(e.target.value);
+document.getElementById('resetStyle').onclick = () => applyStyle(styleKey);
+document.getElementById('copyStyle').onclick = async () => {
+  const text = `${styleKey}: ${JSON.stringify(style, null, 2)},`;
+  try { await navigator.clipboard.writeText(text); status('Style settings copied. Paste them to Claude to make them the default.'); }
+  catch { document.getElementById('readout').textContent = text; status('Clipboard blocked; settings shown below.'); }
+};
 document.getElementById('outline').onchange = e => outlineEntities.forEach(en => en.show = e.target.checked);
 document.getElementById('guides').onchange = e => document.getElementById('safe').classList.toggle('on', e.target.checked);
 const aspectSelect = document.getElementById('aspect');
@@ -677,8 +773,8 @@ document.getElementById('kmlBtn').onclick = async () => {
 };
 
 window.app = { s, applyCamera, applyStyle, viewer, state: () => ({ dots: dotPrims?.length, landMask: !!landMask, lights: !!lightGrid }) };
-applyStyle(styleSelect.value); applyCamera();
-dataReady.then(() => applyStyle(styleSelect.value));
+applyStyle(styleSelect.value); syncAll(); applyCamera();
+dataReady.then(() => { renderLines(); renderDots(); }); // keeps any slider tweaks made while data loaded
 new ResizeObserver(() => applyCamera()).observe(document.getElementById('frame'));
 </script>
 </body>
