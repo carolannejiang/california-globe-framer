@@ -19,7 +19,8 @@
 // limb        line drawn along the edge of the globe: { color, width, glow (soft halo radius in px, 0 = none) } or null
 // sheen       diagonal light across the globe, brightest top-left: { color, alpha } or null
 // dots        dot-matrix land, dots grow where NASA night lights are bright (western hemisphere only):
-//               { color, alpha, size (px), spacing (km between dots), lights (0 = uniform dots, 1 = full city boost) } or null
+//               { color, alpha, size (px), spacing (km between dots in California), outsideSpacing (km between dots elsewhere;
+//                 larger = sparser, darker land around a brighter California), lights (0 = uniform dots, 1 = full city boost) } or null
 // horizonLines  fine lines exactly parallel to the horizon, tightest at the horizon and widening outward
 //               in a strict geometric progression (each gap is a fixed multiple of the one before):
 //               { color, alpha, count (number of lines), extent (how far above the horizon the last line sits, in frame heights),
@@ -125,7 +126,7 @@ window.GLOBE_STYLES = {
     background: ['#4867b6', '#3f5dab'],
     outline: { color: 'rgba(240,242,255,1)', width: 2, glow: 0 },
     borders: { color: 'rgba(214,220,250,0.3)', width: 1 },
-    dots: { color: '#cfd5f5', alpha: 0.5, size: 1.5, spacing: 14, lights: 0.6 },
+    dots: { color: '#cfd5f5', alpha: 0.5, size: 1.5, spacing: 11, outsideSpacing: 22, lights: 0.6 },
     horizonLines: { color: '#dfe3fb', alpha: 0.5, count: 130, extent: 0.45, growth: 60, overGlobe: 0 },
     limb: { color: 'rgba(225,230,255,0.8)', width: 1 },
   },

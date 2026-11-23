@@ -175,20 +175,22 @@ const dataReady = Promise.all([
   const worldLines = topojson.mesh(world, world.objects.countries).coordinates;
   lineSets.borders = [...stateBorders, ...worldLines].map(toPositions);
   landGeo = topojson.feature(world, world.objects.land);
+  caPolys = polys;
 });
 
 // Dot-matrix land: a staggered grid of dots over land, larger where NASA night lights are bright.
 // Land and lights are rasterised once into equirectangular grids covering this region.
 const REGION = { w: -175, e: -45, s: 5, n: 80, res: 0.05 };
 const RW = Math.round((REGION.e - REGION.w) / REGION.res), RH = Math.round((REGION.n - REGION.s) / REGION.res);
-let landGeo, landMask, lightGrid;
+let landGeo, caPolys, landMask, caMask, lightGrid;
 
-function rasterLand() {
+// polys: list of polygons, each a list of [lon, lat] rings
+function rasterize(polys) {
   const cv = document.createElement('canvas');
   cv.width = RW; cv.height = RH;
   const g = cv.getContext('2d');
   g.beginPath();
-  for (const poly of landGeo.features.flatMap(f => f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates)) {
+  for (const poly of polys) {
     for (const ring of poly) {
       ring.forEach(([x, y], i) => g[i ? 'lineTo' : 'moveTo']((x - REGION.w) / REGION.res, (REGION.n - y) / REGION.res));
       g.closePath();
@@ -223,31 +225,38 @@ async function setDots(spec) {
   if (dotPrims) scene.primitives.remove(dotPrims);
   dotPrims = null;
   if (!spec || !landGeo) return;
-  landMask ||= rasterLand();
+  landMask ||= rasterize(landGeo.features.flatMap(f => f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates));
+  caMask ||= rasterize(caPolys);
   if (spec.lights > 0) lightGrid ||= await loadLights().catch(() => null);
   if (token !== dotToken) return; // style changed while loading
 
   const col = new C.PointPrimitiveCollection();
   const base = css(spec.color);
   const scale = new C.NearFarScalar(3e5, 1.6, 6e6, 0.35);
-  const dLat = spec.spacing / 111.2;
-  let row = 0;
-  for (let lat = REGION.s; lat < REGION.n; lat += dLat, row++) {
-    const dLon = dLat / Math.cos(rad(lat));
-    for (let lon = REGION.w + (row % 2) * dLon / 2; lon < REGION.e; lon += dLon) {
-      const x = Math.floor((lon - REGION.w) / REGION.res), y = Math.floor((REGION.n - lat) / REGION.res);
-      if (!landMask[y * RW + x]) continue;
-      let light = 0;
-      if (lightGrid) for (let j = -2; j <= 2; j++) for (let i = -2; i <= 2; i++) light = Math.max(light, lightGrid[(y + j) * RW + x + i] || 0);
-      const l = Math.pow(light / 255, 1.5) * spec.lights;
-      col.add({
-        position: C.Cartesian3.fromDegrees(lon, lat, 1500),
-        pixelSize: spec.size * (1 + 1.8 * l),
-        color: base.withAlpha(Math.min(1, spec.alpha * (1 + 1.5 * l))),
-        scaleByDistance: scale,
-      });
+  // California gets its own grid at `spacing`; other land uses `outsideSpacing` (sparser = darker tone)
+  const addGrid = (spacingKm, inCalifornia) => {
+    const dLat = spacingKm / 111.2;
+    let row = 0;
+    for (let lat = REGION.s; lat < REGION.n; lat += dLat, row++) {
+      const dLon = dLat / Math.cos(rad(lat));
+      for (let lon = REGION.w + (row % 2) * dLon / 2; lon < REGION.e; lon += dLon) {
+        const x = Math.floor((lon - REGION.w) / REGION.res), y = Math.floor((REGION.n - lat) / REGION.res);
+        const cell = y * RW + x;
+        if (!landMask[cell] || !!caMask[cell] !== inCalifornia) continue;
+        let light = 0;
+        if (lightGrid) for (let j = -2; j <= 2; j++) for (let i = -2; i <= 2; i++) light = Math.max(light, lightGrid[(y + j) * RW + x + i] || 0);
+        const l = Math.pow(light / 255, 1.5) * spec.lights;
+        col.add({
+          position: C.Cartesian3.fromDegrees(lon, lat, 1500),
+          pixelSize: spec.size * (1 + 1.8 * l),
+          color: base.withAlpha(Math.min(1, spec.alpha * (1 + 1.5 * l))),
+          scaleByDistance: scale,
+        });
+      }
     }
-  }
+  };
+  addGrid(spec.spacing, true);
+  addGrid(spec.outsideSpacing ?? spec.spacing, false);
   dotPrims = scene.primitives.add(col);
 }
 
