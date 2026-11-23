@@ -342,6 +342,7 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
     uniform sampler2D depthTexture;
     uniform vec3 earthEye;     // Earth's centre in eye coordinates
     uniform vec2 tanHalf;      // tan of half the horizontal / vertical field of view
+    uniform float lensTan;     // tan of half the lens FOV, ignoring frame size and ratio
     uniform vec4 limbColor;
     uniform float limbWidth;
     uniform float limbGlow;
@@ -352,16 +353,16 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
     uniform vec4 lineColor;
     uniform float lineCount;
     uniform float lineRatio;   // each gap ÷ the previous gap
-    uniform float lineFirst;   // first gap, in frame heights
+    uniform float lineFirst;   // first gap, in lens heights (frame heights at frame size 1)
     uniform float lineOverGlobe;
     uniform float lineGlow;        // extra brightness near the horizon
-    uniform float lineGlowHeight;  // how far up the glow reaches, in frame heights
+    uniform float lineGlowHeight;  // how far up the glow reaches, in lens heights
     uniform vec4 shellColor;
     uniform float shellCount;
     uniform float shellSpacing;
     uniform float shellEdge;
     uniform float shellGlow;        // extra light in the layers nearest the horizon
-    uniform float shellGlowHeight;  // how far up that glow reaches, in frame heights
+    uniform float shellGlowHeight;  // how far up that glow reaches, in lens heights
     uniform vec4 patternColor;
     uniform float patternScale;
     uniform float paper;
@@ -378,7 +379,8 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
     }
 
     // Position relative to the Earth's horizon: y = angular height above the limb, x = distance along it.
-    // Both are scaled to roughly fractions of the frame height, so effects keep their size at any lens.
+    // Both are angles scaled by the lens (not the frame), so effects keep their size at any lens and stay
+    // locked to the globe when the frame size or ratio changes: a wider frame just shows more of them.
     vec2 horizonCoords(vec2 uv) {
       vec3 rd = normalize(vec3((uv * 2.0 - 1.0) * tanHalf, -1.0));
       float D = length(earthEye);
@@ -390,7 +392,7 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
       vec3 e2 = cross(ax, e1);
       vec3 q = rd - ax * dot(rd, ax);
       float theta = atan(dot(q, e2), dot(q, e1));
-      float k = 0.5 / tanHalf.y;
+      float k = 0.5 / lensTan;
       return vec2(theta * sin(limb) * k, (beta - limb) * k);
     }
 
@@ -493,6 +495,7 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
     }`,
   uniforms: {
     earthEye: () => C.Matrix4.multiplyByPoint(camera.viewMatrix, C.Cartesian3.ZERO, earthEye),
+    lensTan: () => Math.tan(rad(s.fov) / 2),
     tanHalf: () => {
       const t = Math.tan(camera.frustum.fovy / 2);
       return new C.Cartesian2(t * camera.frustum.aspectRatio, t);

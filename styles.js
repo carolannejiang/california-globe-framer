@@ -32,14 +32,14 @@
 //                 outsideLights (the same for other land; defaults to lights) } or null
 // horizonLines  fine lines exactly parallel to the horizon, tightest at the horizon and widening outward
 //               in a strict geometric progression (each gap is a fixed multiple of the one before):
-//               { color, alpha, count (number of lines), extent (how far above the horizon the last line sits, in frame heights),
+//               { color, alpha, count (number of lines), extent (how far above the horizon the last line sits, in frame heights at frame size 1),
 //                 growth (last gap ÷ first gap, e.g. 10), overGlobe (0–1 strength over the globe vs. space),
-//                 glow (0–3 extra brightness at the horizon), glowHeight (how far up the glow fades out, in frame heights) } or null
+//                 glow (0–3 extra brightness at the horizon), glowHeight (how far up the glow fades out, in frame heights at frame size 1) } or null
 // oceanTexture, landTexture   relief/bathymetry shading as darkness only (no colour), each
 //               { strength (0–1), contrast (1 = normal) } or null. Switch on in any style under Layers.
 // shells      stepped translucent layers above the horizon, each with a hairline edge, like overlapping glass rings:
 //               { color, alpha (fill of the innermost layer; 0 = edges only), count, spacing (fraction of frame height), edge (hairline strength),
-//                 glow (0–3 extra light in the layers nearest the horizon), glowHeight (how far up the glow fades out, in frame heights) } or null
+//                 glow (0–3 extra light in the layers nearest the horizon), glowHeight (how far up the glow fades out, in frame heights at frame size 1) } or null
 // pattern     faint interlaced-circle lattice over the whole frame: { color, alpha, scale (circles per frame height) } or null
 // paper       mottled tone with faint fibres, like uneven printed stock: { amount (0–0.2), scale (blotches per frame height) } or null
 // vignette    darken toward the corners, 0–1
