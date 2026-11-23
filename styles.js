@@ -20,9 +20,10 @@
 // sheen       diagonal light across the globe, brightest top-left: { color, alpha } or null
 // dots        dot-matrix land, dots grow where NASA night lights are bright (western hemisphere only):
 //               { color, alpha, size (px), spacing (km between dots), lights (0 = uniform dots, 1 = full city boost) } or null
-// horizonLines  many fine lines parallel to the horizon that condense and spread apart, like stylised atmosphere:
-//               { color, alpha, count (number of lines), extent (how far above the horizon, in frame heights),
-//                 overGlobe (0–1 strength over the globe vs. space) } or null
+// horizonLines  fine lines exactly parallel to the horizon, tightest at the horizon and widening outward
+//               in a strict geometric progression (each gap is a fixed multiple of the one before):
+//               { color, alpha, count (number of lines), extent (how far above the horizon the last line sits, in frame heights),
+//                 growth (last gap ÷ first gap, e.g. 10), overGlobe (0–1 strength over the globe vs. space) } or null
 // shells      stepped translucent layers above the horizon, each with a hairline edge, like overlapping glass rings:
 //               { color, alpha (fill of the innermost layer; 0 = edges only), count, spacing (fraction of frame height), edge (hairline strength) } or null
 // pattern     faint interlaced-circle lattice over the whole frame: { color, alpha, scale (circles per frame height) } or null
@@ -117,7 +118,7 @@ window.GLOBE_STYLES = {
   },
 
   // After a cornflower-blue research-report cover: flat periwinkle, dot-matrix texture,
-  // a field of hairlines following the horizon, condensing and spreading like the cover's moiré.
+  // a field of hairlines following the horizon, packed tight at the horizon and opening up into space.
   halftone: {
     name: 'Halftone',
     globeColor: '#3a56a4',
@@ -125,7 +126,7 @@ window.GLOBE_STYLES = {
     outline: { color: 'rgba(240,242,255,1)', width: 2, glow: 0 },
     borders: { color: 'rgba(214,220,250,0.3)', width: 1 },
     dots: { color: '#cfd5f5', alpha: 0.5, size: 1.5, spacing: 14, lights: 0.6 },
-    horizonLines: { color: '#dfe3fb', alpha: 0.5, count: 130, extent: 0.5, overGlobe: 0 },
+    horizonLines: { color: '#dfe3fb', alpha: 0.5, count: 130, extent: 0.6, growth: 10, overGlobe: 0 },
     limb: { color: 'rgba(225,230,255,0.8)', width: 1 },
   },
 };

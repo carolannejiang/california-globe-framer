@@ -294,7 +294,8 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
     uniform vec4 sheenColor;
     uniform vec4 lineColor;
     uniform float lineCount;
-    uniform float lineExtent;
+    uniform float lineRatio;   // each gap ÷ the previous gap
+    uniform float lineFirst;   // first gap, in frame heights
     uniform float lineOverGlobe;
     uniform vec4 shellColor;
     uniform float shellCount;
@@ -332,19 +333,15 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
       return vec2(theta * sin(limb) * k, (beta - limb) * k);
     }
 
-    // Fine lines running parallel to the horizon. Their spacing is warped with height so lines
-    // condense and spread apart, and the warp drifts slowly along the arc. The warp's slope never
-    // drops to zero, so lines never cross or twist.
+    // Fine lines exactly parallel to the horizon, spaced in a geometric progression: the gap after
+    // each line is lineRatio times the one before, so lines are tightest at the horizon and widen
+    // steadily outward. Line n sits at height lineFirst * (lineRatio^n - 1) / (lineRatio - 1).
     float horizonLines(vec2 p) {
-      float u = p.y / lineExtent;  // 0 at the limb, 1 at the top of the field
-      float w = u + 0.045 * sin(6.2831853 * (2.0 * u + 0.2 * p.x + 0.1))
-                  + 0.008 * sin(6.2831853 * (5.0 * u - 0.3 * p.x + 0.4));
-      float lineCoord = w * lineCount;
+      float lineCoord = log(1.0 + max(p.y, 0.0) * (lineRatio - 1.0) / lineFirst) / log(lineRatio);
       float fw = fwidth(lineCoord) * max(1.0, czm_pixelRatio * 0.5);
       float line = 1.0 - smoothstep(0.0, fw, abs(fract(lineCoord + 0.5) - 0.5));
       line = mix(line, 0.45, smoothstep(0.15, 0.45, fw)); // where lines merge, use average coverage (avoids moiré)
-      float uc = clamp(u, 0.0, 1.0);
-      return line * step(0.0, u) * step(u, 1.0) * pow(1.0 - uc, 1.2);
+      return line * step(0.0, p.y) * (1.0 - smoothstep(lineCount - 0.5, lineCount + 0.5, lineCoord)); // stop after the last line
     }
 
     float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -435,7 +432,7 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
     },
     limbColor: C.Color.WHITE, limbWidth: 0, limbGlow: 0, bgGradient: 0, bgTop: C.Color.BLACK,
     bgBottom: C.Color.BLACK, sheenColor: C.Color.TRANSPARENT, lineColor: C.Color.TRANSPARENT,
-    lineCount: 130, lineExtent: 0.5, lineOverGlobe: 0, shellColor: C.Color.TRANSPARENT, shellCount: 0, shellSpacing: 0.05,
+    lineCount: 130, lineRatio: 1.02, lineFirst: 0.001, lineOverGlobe: 0, shellColor: C.Color.TRANSPARENT, shellCount: 0, shellSpacing: 0.05,
     shellEdge: 0, patternColor: C.Color.TRANSPARENT, patternScale: 6, paper: 0, paperScale: 4, vignette: 0, grain: 0,
   },
 }));
@@ -469,8 +466,11 @@ function applyStyle(key) {
   fx.uniforms.sheenColor = style.sheen ? css(style.sheen.color).withAlpha(style.sheen.alpha) : C.Color.TRANSPARENT;
   const hl = style.horizonLines;
   fx.uniforms.lineColor = hl ? css(hl.color).withAlpha(hl.alpha) : C.Color.TRANSPARENT;
-  fx.uniforms.lineCount = hl?.count ?? 130;
-  fx.uniforms.lineExtent = hl?.extent ?? 0.5;
+  // Geometric spacing: `count` lines spanning `extent`, with the last gap `growth` times the first
+  const count = hl?.count ?? 130, ratio = Math.pow(hl?.growth ?? 10, 1 / (count - 1));
+  fx.uniforms.lineCount = count;
+  fx.uniforms.lineRatio = ratio;
+  fx.uniforms.lineFirst = (hl?.extent ?? 0.5) * (ratio - 1) / (Math.pow(ratio, count) - 1);
   fx.uniforms.lineOverGlobe = hl?.overGlobe ?? 0;
   const sh = style.shells;
   fx.uniforms.shellCount = sh?.count ?? 0;
