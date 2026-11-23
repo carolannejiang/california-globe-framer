@@ -197,25 +197,47 @@ function setLines(key, sets, spec) {
   linePrims[key] = scene.primitives.add(col);
 }
 
-// Screen-space effects: line along the globe's edge, and grain
+// Screen-space effects: gradient sky, sheen, line + halo along the globe's edge, and grain
 const fx = scene.postProcessStages.add(new C.PostProcessStage({
   fragmentShader: `
     uniform sampler2D colorTexture;
     uniform sampler2D depthTexture;
     uniform vec4 limbColor;
     uniform float limbWidth;
+    uniform float limbGlow;
+    uniform float bgGradient;
+    uniform vec4 bgTop;
+    uniform vec4 bgBottom;
+    uniform vec4 sheenColor;
     uniform float grain;
     in vec2 v_textureCoordinates;
     float sky(vec2 uv) { return czm_unpackDepth(texture(depthTexture, uv)) >= 1.0 ? 1.0 : 0.0; }
     void main() {
-      vec4 c = texture(colorTexture, v_textureCoordinates);
+      vec2 uv = v_textureCoordinates;
+      vec4 c = texture(colorTexture, uv);
+      float self = sky(uv);
+      if (bgGradient > 0.0 && self > 0.0) c.rgb = mix(bgBottom.rgb, bgTop.rgb, uv.y);
+      if (sheenColor.a > 0.0 && self < 1.0) {
+        float t = clamp((1.0 - uv.x + uv.y) * 0.5, 0.0, 1.0);
+        c.rgb += sheenColor.rgb * sheenColor.a * t * t;
+      }
+      if (limbGlow > 0.0 && self > 0.0) {
+        float halo = 0.0;
+        for (int j = 1; j <= 4; j++) {
+          vec2 r = float(j) * 0.25 * limbGlow * czm_pixelRatio / czm_viewport.zw;
+          for (int i = 0; i < 8; i++) {
+            float a = float(i) * 0.7853982;
+            halo += (1.0 - sky(uv + vec2(cos(a), sin(a)) * r)) * (1.0 - float(j) * 0.2);
+          }
+        }
+        c.rgb = mix(c.rgb, limbColor.rgb, clamp(halo / 16.0, 0.0, 1.0) * limbColor.a * 0.6);
+      }
       if (limbWidth > 0.0) {
-        float self = sky(v_textureCoordinates);
         vec2 px = limbWidth * czm_pixelRatio / czm_viewport.zw;
         float edge = 0.0;
         for (int i = 0; i < 8; i++) {
           float a = float(i) * 0.7853982;
-          edge += sky(v_textureCoordinates + vec2(cos(a), sin(a)) * px);
+          edge += sky(uv + vec2(cos(a), sin(a)) * px);
         }
         edge = clamp(edge / 3.0, 0.0, 1.0); // soft coverage instead of a hard step, so the line isn't jagged
         c.rgb = mix(c.rgb, limbColor.rgb, edge * (1.0 - self) * limbColor.a);
@@ -226,7 +248,8 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
       }
       out_FragColor = c;
     }`,
-  uniforms: { limbColor: C.Color.WHITE, limbWidth: 0, grain: 0 },
+  uniforms: { limbColor: C.Color.WHITE, limbWidth: 0, limbGlow: 0, bgGradient: 0, bgTop: C.Color.BLACK,
+              bgBottom: C.Color.BLACK, sheenColor: C.Color.TRANSPARENT, grain: 0 },
 }));
 
 function applyStyle(key) {
@@ -238,6 +261,8 @@ function applyStyle(key) {
     layer.hue = C.Math.toRadians(im?.hue ?? 0);
     layer.gamma = im?.gamma ?? 1;
     layer.alpha = im?.alpha ?? 1;
+    layer.colorToAlpha = im?.colorToAlpha ? css(im.colorToAlpha) : undefined;
+    layer.colorToAlphaThreshold = im?.colorToAlphaThreshold ?? 0.004;
   }
   s.brightness = im?.brightness ?? 1;
   s.contrast = im?.contrast ?? 1;
@@ -246,7 +271,12 @@ function applyStyle(key) {
   maskColor = css(style.mask.color);
 
   scene.globe.baseColor = css(style.globeColor);
-  scene.backgroundColor = css(style.background);
+  const bg = [].concat(style.background);
+  scene.backgroundColor = css(bg[bg.length - 1]);
+  fx.uniforms.bgGradient = bg.length > 1 ? 1 : 0;
+  fx.uniforms.bgTop = css(bg[0]);
+  fx.uniforms.bgBottom = css(bg[bg.length - 1]);
+  fx.uniforms.sheenColor = style.sheen ? css(style.sheen.color).withAlpha(style.sheen.alpha) : C.Color.TRANSPARENT;
   scene.skyBox.show = style.stars;
   scene.skyAtmosphere.show = style.atmosphere;
   scene.globe.showGroundAtmosphere = style.groundHaze;
@@ -264,6 +294,7 @@ function applyStyle(key) {
 
   fx.uniforms.limbColor = css(style.limb?.color ?? '#ffffff');
   fx.uniforms.limbWidth = style.limb?.width ?? 0;
+  fx.uniforms.limbGlow = style.limb?.glow ?? 0;
   fx.uniforms.grain = style.grain;
 
   syncAll(); applyLook();

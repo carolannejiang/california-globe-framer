@@ -7,14 +7,16 @@
 //   saturation  0 = grayscale, 1 = unchanged
 //   hue         rotation in degrees
 //   alpha       0–1; below 1 the imagery blends over globeColor (grayscale + low alpha = tinted relief)
+//   colorToAlpha, colorToAlphaThreshold   make one colour see-through, e.g. '#000000' keeps only the city lights
 // globeColor  colour of the globe surface under the imagery
-// background  colour of space
+// background  colour of space, or [top, bottom] for a vertical gradient
 // stars, atmosphere (blue rim glow), groundHaze (atmospheric haze + fog on the surface)
 // outline     California outline: color, width (px), glow (0 = flat line, ~0.3 = soft neon)
 // borders     coastlines, country and state borders: { color, width } or null
 // graticule   lat/lon grid: { step (degrees), color, width } or null
 // mask        tint over everything outside California: { color, alpha }
-// limb        line drawn along the edge of the globe: { color, width } or null
+// limb        line drawn along the edge of the globe: { color, width, glow (soft halo radius in px, 0 = none) } or null
+// sheen       diagonal light across the globe, brightest top-left: { color, alpha } or null
 // grain       film/paper noise, 0–0.2
 // bloom       glow around bright areas, 0–4
 window.DEFAULT_STYLE = {
@@ -29,6 +31,7 @@ window.DEFAULT_STYLE = {
   graticule: null,
   mask: { color: '#000000', alpha: 0 },
   limb: null,
+  sheen: null,
   grain: 0,
   bloom: 0,
 };
@@ -66,5 +69,21 @@ window.GLOBE_STYLES = {
     mask: { color: '#1d365f', alpha: 0.2 },
     limb: { color: '#ffffff', width: 1.5 },
     grain: 0.05,
+  },
+
+  // After a deep ultramarine government-report cover: glowing electric blue, glassy light, hairline strokes.
+  ultramarine: {
+    name: 'Ultramarine',
+    imagery: { layer: 'night', saturation: 0, brightness: 1.5, contrast: 1.2, alpha: 0.6 },
+    globeColor: '#2a36ff',
+    background: ['#16249a', '#050b33'],
+    outline: { color: 'rgba(230,234,255,0.9)', width: 1.5, glow: 0 },
+    borders: { color: 'rgba(190,200,255,0.22)', width: 1 },
+    graticule: { step: 10, color: 'rgba(190,200,255,0.1)', width: 1 },
+    mask: { color: '#070d55', alpha: 0.35 },
+    limb: { color: 'rgba(210,218,255,0.7)', width: 1, glow: 60 },
+    sheen: { color: '#8f9cff', alpha: 0.3 },
+    grain: 0.015,
+    bloom: 0.5,
   },
 };
