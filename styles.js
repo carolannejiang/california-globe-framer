@@ -126,7 +126,7 @@ window.GLOBE_STYLES = {
     outline: { color: 'rgba(240,242,255,1)', width: 2, glow: 0 },
     borders: { color: 'rgba(214,220,250,0.3)', width: 1 },
     dots: { color: '#cfd5f5', alpha: 0.5, size: 1.5, spacing: 14, lights: 0.6 },
-    horizonLines: { color: '#dfe3fb', alpha: 0.5, count: 130, extent: 0.6, growth: 10, overGlobe: 0 },
+    horizonLines: { color: '#dfe3fb', alpha: 0.5, count: 130, extent: 0.45, growth: 60, overGlobe: 0 },
     limb: { color: 'rgba(225,230,255,0.8)', width: 1 },
   },
 };
