@@ -7,6 +7,7 @@
 <script>window.CESIUM_BASE_URL = 'https://cdn.jsdelivr.net/npm/cesium@1.123.0/Build/Cesium/';</script>
 <script src="https://cdn.jsdelivr.net/npm/cesium@1.123.0/Build/Cesium/Cesium.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
+<script src="styles.js"></script>
 <link href="https://cdn.jsdelivr.net/npm/cesium@1.123.0/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
 <style>
   :root { --bg:#111; --panel:#1b1b1d; --fg:#e8e6e1; --muted:#9a978f; --accent:#f2b544; --line:#2c2c30; }
@@ -65,16 +66,11 @@
     <div id="sliders"></div>
 
     <h2>Look</h2>
-    <label class="row">Imagery
-      <select id="imagery" style="grid-column: span 2">
-        <option value="night">Night lights (NASA Black Marble)</option>
-        <option value="day">Day (NASA Blue Marble)</option>
-      </select>
+    <label class="row">Style
+      <select id="style" style="grid-column: span 2"></select>
     </label>
     <div id="lookSliders"></div>
     <label class="check"><input type="checkbox" id="outline" checked> California outline</label>
-    <label class="check"><input type="checkbox" id="atmo" checked> Atmosphere haze on ground</label>
-    <label class="check"><input type="checkbox" id="stars" checked> Stars</label>
 
     <h2>Frame</h2>
     <label class="row">Aspect
@@ -139,13 +135,22 @@ const layers = {
   night: viewer.imageryLayers.addImageryProvider(gibs('VIIRS_Black_Marble', '2016-01-01', 'png')),
   day: viewer.imageryLayers.addImageryProvider(gibs('BlueMarble_ShadedRelief_Bathymetry', '2004-08-01', 'jpeg')),
 };
-layers.day.show = false;
+scene.globe.depthTestAgainstTerrain = true; // hide linework on the far side of the globe
+
+const css = c => C.Color.fromCssColorString(c);
+let style = null;
+let maskColor = C.Color.BLACK;
 
 // California outline + darkening mask outside the state
 const outlineEntities = [];
-let maskEntity;
-fetch('https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json').then(r => r.json()).then(topo => {
-  const ca = topojson.feature(topo, topo.objects.states).features.find(f => f.id === '06');
+const lineSets = { borders: [], graticule: [] }; // arrays of Cartesian3[]
+const linePrims = {};
+const toPositions = line => C.Cartesian3.fromDegreesArrayHeights(line.flatMap(([x, y]) => [x, y, 300]));
+const dataReady = Promise.all([
+  fetch('https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json').then(r => r.json()),
+  fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-50m.json').then(r => r.json()),
+]).then(([us, world]) => {
+  const ca = topojson.feature(us, us.objects.states).features.find(f => f.id === '06');
   const polys = ca.geometry.type === 'MultiPolygon' ? ca.geometry.coordinates : [ca.geometry.coordinates];
   const holes = [];
   for (const poly of polys) {
@@ -154,15 +159,115 @@ fetch('https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json').then(r => r.jso
     outlineEntities.push(viewer.entities.add({ polyline: {
       positions: C.Cartesian3.fromDegreesArrayHeights(ring.flatMap(([x, y]) => [x, y, 400])),
       width: 4, arcType: C.ArcType.RHUMB,
-      material: new C.PolylineGlowMaterialProperty({ glowPower: 0.3, color: C.Color.fromCssColorString('#ffcf6b') }),
     }}));
   }
-  const outer = C.Cartesian3.fromDegreesArray([-150, 10, -80, 10, -80, 65, -150, 65]);
-  maskEntity = viewer.entities.add({ polygon: {
+  const outer = C.Cartesian3.fromDegreesArray([-179, -50, -30, -50, -30, 85, -179, 85]);
+  viewer.entities.add({ polygon: {
     hierarchy: new C.PolygonHierarchy(outer, holes), height: 200, arcType: C.ArcType.RHUMB,
-    material: new C.ColorMaterialProperty(new C.CallbackProperty(() => C.Color.BLACK.withAlpha(s.mask), false)),
+    material: new C.ColorMaterialProperty(new C.CallbackProperty(() => maskColor.withAlpha(s.mask), false)),
   }});
+
+  const stateBorders = topojson.mesh(us, us.objects.states, (a, b) => a !== b).coordinates;
+  const worldLines = topojson.mesh(world, world.objects.countries).coordinates;
+  lineSets.borders = [...stateBorders, ...worldLines].map(toPositions);
 });
+
+function graticule(step) {
+  const lines = [];
+  for (let lat = -80; lat <= 80; lat += step) {
+    const l = [];
+    for (let lon = -180; lon <= 180; lon += 1) l.push([lon, lat]);
+    lines.push(l);
+  }
+  for (let lon = -180; lon < 180; lon += step) {
+    const l = [];
+    for (let lat = -85; lat <= 85; lat += 1) l.push([lon, lat]);
+    lines.push(l);
+  }
+  return lines.map(toPositions);
+}
+
+function setLines(key, sets, spec) {
+  if (linePrims[key]) scene.primitives.remove(linePrims[key]);
+  linePrims[key] = null;
+  if (!spec) return;
+  const col = new C.PolylineCollection();
+  const material = C.Material.fromType('Color', { color: css(spec.color) });
+  for (const positions of sets) col.add({ positions, width: spec.width, material });
+  linePrims[key] = scene.primitives.add(col);
+}
+
+// Screen-space effects: line along the globe's edge, and grain
+const fx = scene.postProcessStages.add(new C.PostProcessStage({
+  fragmentShader: `
+    uniform sampler2D colorTexture;
+    uniform sampler2D depthTexture;
+    uniform vec4 limbColor;
+    uniform float limbWidth;
+    uniform float grain;
+    in vec2 v_textureCoordinates;
+    float sky(vec2 uv) { return czm_unpackDepth(texture(depthTexture, uv)) >= 1.0 ? 1.0 : 0.0; }
+    void main() {
+      vec4 c = texture(colorTexture, v_textureCoordinates);
+      if (limbWidth > 0.0) {
+        float self = sky(v_textureCoordinates);
+        vec2 px = limbWidth * czm_pixelRatio / czm_viewport.zw;
+        float edge = 0.0;
+        for (int i = 0; i < 8; i++) {
+          float a = float(i) * 0.7853982;
+          edge += sky(v_textureCoordinates + vec2(cos(a), sin(a)) * px);
+        }
+        edge = clamp(edge / 3.0, 0.0, 1.0); // soft coverage instead of a hard step, so the line isn't jagged
+        c.rgb = mix(c.rgb, limbColor.rgb, edge * (1.0 - self) * limbColor.a);
+      }
+      if (grain > 0.0) {
+        float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+        c.rgb += (n - 0.5) * grain;
+      }
+      out_FragColor = c;
+    }`,
+  uniforms: { limbColor: C.Color.WHITE, limbWidth: 0, grain: 0 },
+}));
+
+function applyStyle(key) {
+  style = { ...DEFAULT_STYLE, ...GLOBE_STYLES[key] };
+  const im = style.imagery;
+  for (const [name, layer] of Object.entries(layers)) {
+    layer.show = !!im && im.layer === name;
+    layer.saturation = im?.saturation ?? 1;
+    layer.hue = C.Math.toRadians(im?.hue ?? 0);
+    layer.gamma = im?.gamma ?? 1;
+    layer.alpha = im?.alpha ?? 1;
+  }
+  s.brightness = im?.brightness ?? 1;
+  s.contrast = im?.contrast ?? 1;
+  s.mask = style.mask.alpha;
+  s.bloom = style.bloom;
+  maskColor = css(style.mask.color);
+
+  scene.globe.baseColor = css(style.globeColor);
+  scene.backgroundColor = css(style.background);
+  scene.skyBox.show = style.stars;
+  scene.skyAtmosphere.show = style.atmosphere;
+  scene.globe.showGroundAtmosphere = style.groundHaze;
+  scene.fog.enabled = style.groundHaze;
+
+  const o = style.outline;
+  for (const en of outlineEntities) {
+    en.polyline.width = o.width;
+    en.polyline.material = o.glow > 0
+      ? new C.PolylineGlowMaterialProperty({ glowPower: o.glow, color: css(o.color) })
+      : new C.ColorMaterialProperty(css(o.color));
+  }
+  setLines('borders', lineSets.borders, style.borders);
+  setLines('graticule', style.graticule ? graticule(style.graticule.step) : [], style.graticule);
+
+  fx.uniforms.limbColor = css(style.limb?.color ?? '#ffffff');
+  fx.uniforms.limbWidth = style.limb?.width ?? 0;
+  fx.uniforms.grain = style.grain;
+
+  syncAll(); applyLook();
+}
 
 function applyCamera() {
   camera.frustum.fov = rad(s.fov);
@@ -237,15 +342,10 @@ for (const [name, p] of Object.entries(PRESETS)) {
   presetBox.appendChild(b);
 }
 
-document.getElementById('imagery').onchange = e => {
-  const night = e.target.value === 'night';
-  layers.night.show = night; layers.day.show = !night;
-  Object.assign(s, night ? { brightness: 1.6, contrast: 1.3 } : { brightness: 1, contrast: 1.1 });
-  syncAll(); applyLook();
-};
+const styleSelect = document.getElementById('style');
+for (const [key, st] of Object.entries(GLOBE_STYLES)) styleSelect.add(new Option(st.name || key, key));
+styleSelect.onchange = e => applyStyle(e.target.value);
 document.getElementById('outline').onchange = e => outlineEntities.forEach(en => en.show = e.target.checked);
-document.getElementById('atmo').onchange = e => scene.globe.showGroundAtmosphere = e.target.checked;
-document.getElementById('stars').onchange = e => scene.skyBox.show = e.target.checked;
 document.getElementById('guides').onchange = e => document.getElementById('safe').classList.toggle('on', e.target.checked);
 document.getElementById('aspect').onchange = e => {
   document.getElementById('frame').style.aspectRatio = e.target.value.replace('/', ' / ');
@@ -318,8 +418,9 @@ document.getElementById('kmlBtn').onclick = async () => {
   catch { document.getElementById('readout').textContent = kml; status('Clipboard blocked; KML shown below.'); }
 };
 
-window.app = { s, applyCamera, viewer };
-syncAll(); applyLook(); applyCamera();
+window.app = { s, applyCamera, applyStyle, viewer };
+applyStyle(styleSelect.value); applyCamera();
+dataReady.then(() => applyStyle(styleSelect.value));
 new ResizeObserver(() => applyCamera()).observe(document.getElementById('frame'));
 </script>
 </body>
