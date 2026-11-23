@@ -27,10 +27,10 @@
   h1 { font-size:15px; margin:0 0 2px; }
   .hint { color:var(--muted); font-size:12px; margin:0 0 12px; }
   h2 { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:16px 0 6px; }
-  label.row { display:grid; grid-template-columns: 112px 1fr 40px; align-items:center; gap:8px; margin:4px 0; }
+  .row { display:grid; grid-template-columns: 100px 1fr 68px; align-items:center; gap:8px; margin:4px 0; }
+  .row input[type=number] { width:100%; padding:3px 5px; font-size:12px; text-align:right; font-variant-numeric:tabular-nums; }
   details { border-top:1px solid var(--line); padding:4px 0; }
   details summary { cursor:pointer; font-size:12px; padding:4px 0; }
-  label.row output { text-align:right; font-variant-numeric:tabular-nums; color:var(--muted); }
   input[type=range] { width:100%; accent-color:var(--accent); }
   select, button, input[type=number] { background:#26262a; color:var(--fg); border:1px solid #3a3a40; border-radius:5px; padding:5px 8px; font:inherit; }
   button { cursor:pointer; }
@@ -72,6 +72,7 @@
       <select id="style" style="grid-column: span 2"></select>
     </label>
     <label class="check"><input type="checkbox" id="outline" checked> California outline</label>
+    <label class="check" id="gridToggle"><input type="checkbox" id="grid"> Lat/long grid</label>
     <div id="lookSliders"></div>
     <div class="btns" style="margin-top:8px">
       <button id="resetStyle">Reset style</button>
@@ -318,6 +319,8 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
     uniform float shellCount;
     uniform float shellSpacing;
     uniform float shellEdge;
+    uniform float shellGlow;        // extra light in the layers nearest the horizon
+    uniform float shellGlowHeight;  // how far up that glow reaches, in frame heights
     uniform vec4 patternColor;
     uniform float patternScale;
     uniform float paper;
@@ -404,8 +407,11 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
           float edge = hairline(y) * step(0.5, y) * step(y, shellCount + 0.5);
           if (self > 0.0) {
             float inside = step(0.0, y) * step(y, shellCount);
+            float glow = shellGlow * exp(-max(hp.y, 0.0) / shellGlowHeight) * step(0.0, hp.y);
+            vec3 glowColor = mix(shellColor.rgb, vec3(1.0), 0.5);
             c.rgb = mix(c.rgb, shellColor.rgb, inside * shellColor.a * (1.0 - floor(y) / shellCount));
-            c.rgb = mix(c.rgb, shellColor.rgb, edge * shellEdge);
+            c.rgb += glowColor * glow * 0.4;  // soft luminous haze in the lower layers
+            c.rgb = mix(c.rgb, glowColor, clamp(edge * shellEdge * (1.0 + 2.0 * glow), 0.0, 1.0));
           }
         }
         if (lineColor.a > 0.0) {
@@ -453,7 +459,7 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
     limbColor: C.Color.WHITE, limbWidth: 0, limbGlow: 0, bgGradient: 0, bgTop: C.Color.BLACK,
     bgBottom: C.Color.BLACK, sheenColor: C.Color.TRANSPARENT, lineColor: C.Color.TRANSPARENT,
     lineCount: 130, lineRatio: 1.02, lineFirst: 0.001, lineOverGlobe: 0, lineGlow: 0, lineGlowHeight: 0.05, shellColor: C.Color.TRANSPARENT, shellCount: 0, shellSpacing: 0.05,
-    shellEdge: 0, patternColor: C.Color.TRANSPARENT, patternScale: 6, paper: 0, paperScale: 4, vignette: 0, grain: 0,
+    shellEdge: 0, shellGlow: 0, shellGlowHeight: 0.05, patternColor: C.Color.TRANSPARENT, patternScale: 6, paper: 0, paperScale: 4, vignette: 0, grain: 0,
   },
 }));
 
@@ -463,6 +469,8 @@ function applyStyle(key) {
   style = structuredClone({ ...DEFAULT_STYLE, ...GLOBE_STYLES[key] });
   renderFx(); renderLines(); renderDots();
   buildStyleControls();
+  document.getElementById('gridToggle').style.display = style.graticule ? '' : 'none';
+  document.getElementById('grid').checked = style.showGrid;
 }
 
 // Cheap, instant settings: imagery, colours, shader uniforms, outline, glow
@@ -506,6 +514,8 @@ function renderFx() {
   fx.uniforms.shellColor = sh ? css(sh.color).withAlpha(sh.alpha) : C.Color.TRANSPARENT;
   fx.uniforms.shellSpacing = sh?.spacing ?? 0.05;
   fx.uniforms.shellEdge = sh?.edge ?? 0;
+  fx.uniforms.shellGlow = sh?.glow ?? 0;
+  fx.uniforms.shellGlowHeight = sh?.glowHeight ?? 0.05;
   fx.uniforms.patternColor = style.pattern ? css(style.pattern.color).withAlpha(style.pattern.alpha) : C.Color.TRANSPARENT;
   fx.uniforms.patternScale = style.pattern?.scale ?? 6;
   fx.uniforms.paper = style.paper?.amount ?? 0;
@@ -543,7 +553,7 @@ function renderFx() {
 // These rebuild geometry, so sliders call them debounced
 function renderLines() {
   setLines('borders', lineSets.borders, style.borders);
-  const grids = [].concat(style.graticule || []);
+  const grids = style.showGrid ? [].concat(style.graticule || []) : [];
   for (let i = 0; i < 3; i++) setLines('graticule' + i, grids[i] ? graticule(grids[i].step) : [], grids[i], style.gridOpacity ?? 1);
 }
 function renderDots() { setDots(style.dots); }
@@ -577,14 +587,29 @@ Horizon          ${horizonKm.toFixed(0)} km away, ${dip.toFixed(1)}° below leve
 }
 
 // ---- controls ----
-function slider(parent, key, label, min, max, step, onChange) {
-  const row = document.createElement('label');
+const fmt = v => String(+(+v).toFixed(3));
+
+// A slider plus a number box for typing exact values; typed values may go beyond the slider's range.
+function sliderRow(label, min, max, step, get, set) {
+  const row = document.createElement('div');
   row.className = 'row';
-  row.innerHTML = `${label}<input type="range" min="${min}" max="${max}" step="${step}"><output></output>`;
-  const input = row.querySelector('input'), out = row.querySelector('output');
-  input.addEventListener('input', () => { s[key] = +input.value; out.textContent = input.value; onChange(); });
+  row.innerHTML = `<span>${label}</span><input type="range" min="${min}" max="${max}" step="${step}"><input type="number" step="any">`;
+  const [range, num] = row.querySelectorAll('input');
+  const sync = () => { range.value = get(); num.value = fmt(get()); };
+  range.addEventListener('input', () => { set(+range.value); num.value = fmt(range.value); });
+  num.addEventListener('input', () => {
+    if (num.value === '' || isNaN(+num.value)) return;
+    set(+num.value);
+    range.value = num.value;
+  });
+  sync();
+  return { row, sync };
+}
+
+function slider(parent, key, label, min, max, step, onChange) {
+  const { row, sync } = sliderRow(label, min, max, step, () => s[key], v => { s[key] = v; onChange(); });
   parent.appendChild(row);
-  return () => { input.value = s[key]; out.textContent = s[key]; };
+  return sync;
 }
 const sync = [];
 const cam = document.getElementById('sliders'), look = document.getElementById('lookSliders');
@@ -630,7 +655,7 @@ const CONTROLS = [
   { group: 'Dots', label: 'City size variation', min: 0, max: 5, step: 0.05, show: has('dots'), part: 'dots', get: st => st.dots.lights, set: (st, v) => st.dots.lights = v },
 
   { group: 'Horizon lines', label: 'Line count', min: 10, max: 300, step: 1, show: has('horizonLines'), get: st => st.horizonLines.count, set: (st, v) => st.horizonLines.count = v },
-  { group: 'Horizon lines', label: 'Gap growth ×', min: 1, max: 200, step: 1, show: has('horizonLines'), get: st => st.horizonLines.growth ?? 10, set: (st, v) => st.horizonLines.growth = v },
+  { group: 'Horizon lines', label: 'Gap growth ×', min: 1, max: 1000, step: 1, show: has('horizonLines'), get: st => st.horizonLines.growth ?? 10, set: (st, v) => st.horizonLines.growth = v },
   { group: 'Horizon lines', label: 'Field height', min: 0.05, max: 1, step: 0.01, show: has('horizonLines'), get: st => st.horizonLines.extent, set: (st, v) => st.horizonLines.extent = v },
   { group: 'Horizon lines', label: 'Line brightness', min: 0, max: 1, step: 0.01, show: has('horizonLines'), get: st => st.horizonLines.alpha, set: (st, v) => st.horizonLines.alpha = v },
   { group: 'Horizon lines', label: 'Line glow', min: 0, max: 3, step: 0.05, show: has('horizonLines'), get: st => st.horizonLines.glow ?? 0, set: (st, v) => st.horizonLines.glow = v },
@@ -640,6 +665,8 @@ const CONTROLS = [
   { group: 'Horizon layers', label: 'Layer spacing', min: 0.01, max: 0.2, step: 0.005, show: has('shells'), get: st => st.shells.spacing, set: (st, v) => st.shells.spacing = v },
   { group: 'Horizon layers', label: 'Layer fill', min: 0, max: 0.5, step: 0.01, show: has('shells'), get: st => st.shells.alpha, set: (st, v) => st.shells.alpha = v },
   { group: 'Horizon layers', label: 'Layer edges', min: 0, max: 1, step: 0.01, show: has('shells'), get: st => st.shells.edge, set: (st, v) => st.shells.edge = v },
+  { group: 'Horizon layers', label: 'Layer glow', min: 0, max: 3, step: 0.05, show: has('shells'), get: st => st.shells.glow ?? 0, set: (st, v) => st.shells.glow = v },
+  { group: 'Horizon layers', label: 'Glow height', min: 0.005, max: 0.3, step: 0.005, show: has('shells'), get: st => st.shells.glowHeight ?? 0.05, set: (st, v) => st.shells.glowHeight = v },
 
   { group: 'Texture', label: 'Circle pattern', min: 0, max: 0.4, step: 0.005, show: has('pattern'), get: st => st.pattern.alpha, set: (st, v) => st.pattern.alpha = v },
   { group: 'Texture', label: 'Pattern scale', min: 1, max: 20, step: 0.5, show: has('pattern'), get: st => st.pattern.scale, set: (st, v) => st.pattern.scale = v },
@@ -651,8 +678,6 @@ const CONTROLS = [
 
 const debounced = (fn, ms) => { let t; return () => { clearTimeout(t); t = setTimeout(fn, ms); }; };
 const redraw = { lines: debounced(renderLines, 200), dots: debounced(renderDots, 250) };
-const fmt = v => String(+(+v).toFixed(3));
-
 function buildStyleControls() {
   look.innerHTML = '';
   const groups = new Map();
@@ -665,15 +690,8 @@ function buildStyleControls() {
       look.appendChild(d);
       groups.set(ctl.group, d);
     }
-    const row = document.createElement('label');
-    row.className = 'row';
-    row.innerHTML = `${ctl.label}<input type="range" min="${ctl.min}" max="${ctl.max}" step="${ctl.step}"><output></output>`;
-    const input = row.querySelector('input'), out = row.querySelector('output');
-    input.value = ctl.get(style);
-    out.textContent = fmt(ctl.get(style));
-    input.addEventListener('input', () => {
-      ctl.set(style, +input.value);
-      out.textContent = fmt(input.value);
+    const { row } = sliderRow(ctl.label, ctl.min, ctl.max, ctl.step, () => ctl.get(style), v => {
+      ctl.set(style, v);
       if (ctl.part) redraw[ctl.part](); else renderFx();
     });
     groups.get(ctl.group).appendChild(row);
@@ -698,6 +716,7 @@ document.getElementById('copyStyle').onclick = async () => {
   catch { document.getElementById('readout').textContent = text; status('Clipboard blocked; settings shown below.'); }
 };
 document.getElementById('outline').onchange = e => outlineEntities.forEach(en => en.show = e.target.checked);
+document.getElementById('grid').onchange = e => { style.showGrid = e.target.checked; renderLines(); };
 document.getElementById('guides').onchange = e => document.getElementById('safe').classList.toggle('on', e.target.checked);
 const aspectSelect = document.getElementById('aspect');
 function fitFrame() {

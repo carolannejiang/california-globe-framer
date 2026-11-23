@@ -18,6 +18,7 @@
 // borders     coastlines, country and state borders: { color, width } or null
 // graticule   lat/lon grid: { step (degrees), color, width }, a list of up to 3 of those (e.g. fine + bold), or null
 // gridOpacity multiplies the grid's opacity, 1 = as specified
+// showGrid    whether the grid starts switched on (the "Lat/long grid" checkbox toggles it)
 // mask        tint over everything outside California: { color, alpha }
 // limb        line drawn along the edge of the globe: { color, width, glow (soft halo radius in px, 0 = none) } or null
 // sheen       diagonal light across the globe, brightest top-left: { color, alpha } or null
@@ -30,7 +31,8 @@
 //                 growth (last gap ÷ first gap, e.g. 10), overGlobe (0–1 strength over the globe vs. space),
 //                 glow (0–3 extra brightness at the horizon), glowHeight (how far up the glow fades out, in frame heights) } or null
 // shells      stepped translucent layers above the horizon, each with a hairline edge, like overlapping glass rings:
-//               { color, alpha (fill of the innermost layer; 0 = edges only), count, spacing (fraction of frame height), edge (hairline strength) } or null
+//               { color, alpha (fill of the innermost layer; 0 = edges only), count, spacing (fraction of frame height), edge (hairline strength),
+//                 glow (0–3 extra light in the layers nearest the horizon), glowHeight (how far up the glow fades out, in frame heights) } or null
 // pattern     faint interlaced-circle lattice over the whole frame: { color, alpha, scale (circles per frame height) } or null
 // paper       mottled tone with faint fibres, like uneven printed stock: { amount (0–0.2), scale (blotches per frame height) } or null
 // vignette    darken toward the corners, 0–1
@@ -49,6 +51,7 @@ window.DEFAULT_STYLE = {
   borders: null,
   graticule: null,
   gridOpacity: 1,
+  showGrid: true,
   mask: { color: '#000000', alpha: 0 },
   limb: null,
   sheen: null,
@@ -117,7 +120,7 @@ window.GLOBE_STYLES = {
     mask: { color: '#070d55', alpha: 0.35 },
     limb: { color: 'rgba(210,218,255,0.7)', width: 1, glow: 60 },
     sheen: { color: '#8f9cff', alpha: 0.3 },
-    shells: { color: '#6f7dff', alpha: 0.16, count: 4, spacing: 0.06, edge: 0.35 },
+    shells: { color: '#6f7dff', alpha: 0.16, count: 4, spacing: 0.06, edge: 0.35, glow: 0.8, glowHeight: 0.05 },
     pattern: { color: '#a3adff', alpha: 0.11, scale: 5 },
     paper: { amount: 0.07, scale: 1.5 },
     vignette: 0.4,
@@ -133,6 +136,11 @@ window.GLOBE_STYLES = {
     background: ['#4867b6', '#3f5dab'],
     outline: { color: 'rgba(240,242,255,1)', width: 2, glow: 0 },
     borders: { color: 'rgba(214,220,250,0.3)', width: 1 },
+    graticule: [
+      { step: 1, color: 'rgba(223,227,251,0.07)', width: 1 },
+      { step: 5, color: 'rgba(223,227,251,0.28)', width: 1 },
+    ],
+    showGrid: false,
     dots: { color: '#cfd5f5', alpha: 0.5, size: 1.5, spacing: 11, outsideSpacing: 22, lights: 0.6 },
     horizonLines: { color: '#dfe3fb', alpha: 0.5, count: 130, extent: 0.45, growth: 60, glow: 1.2, glowHeight: 0.04, overGlobe: 0 },
     limb: { color: 'rgba(225,230,255,0.8)', width: 1 },
