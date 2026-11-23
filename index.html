@@ -78,6 +78,7 @@
       <button id="resetStyle">Reset style</button>
       <button id="copyStyle">Copy settings</button>
     </div>
+    <p class="hint" style="margin-top:6px">Your adjustments are saved in this browser and survive reloads and updates.</p>
 
     <h2>Frame</h2>
     <label class="row">Aspect
@@ -467,11 +468,14 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
 }));
 
 let styleKey;
-function applyStyle(key) {
+// fresh = ignore this browser's saved tweaks for the style (Reset style)
+function applyStyle(key, fresh = false) {
   styleKey = key;
-  style = structuredClone({ ...DEFAULT_STYLE, ...GLOBE_STYLES[key] });
+  const defaults = { ...DEFAULT_STYLE, ...GLOBE_STYLES[key] };
+  style = !fresh && saved.styles[key] ? withDefaults(defaults, saved.styles[key]) : structuredClone(defaults);
   renderFx(); renderLines(); renderDots(); renderFills(); renderTextures();
   buildStyleControls();
+  persistSoon();
 }
 
 // Cheap, instant settings: imagery, colours, shader uniforms, outline, glow
@@ -672,6 +676,7 @@ function applyCamera() {
   camera.lookAt(C.Cartesian3.fromDegrees(s.lon, s.lat, 0), new C.HeadingPitchRange(rad(s.heading), rad(s.pitch), s.range * 1000));
   camera.twistRight(rad(s.roll));
   updateReadout();
+  persistSoon();
 }
 
 function cameraView() {
@@ -856,6 +861,7 @@ function buildStyleControls() {
       (box.checked ? f.enable : f.disable)(style);
       if (f.part) RENDER[f.part](); else renderFx();
       buildStyleControls(); // show or hide this layer's dials
+      persistSoon();
     };
     layersBox.appendChild(label);
   }
@@ -870,7 +876,7 @@ function buildStyleControls() {
       look.appendChild(d);
       groups.set(ctl.group, d);
     }
-    const update = v => { ctl.set(style, v); if (ctl.part) redraw[ctl.part](); else renderFx(); };
+    const update = v => { ctl.set(style, v); if (ctl.part) redraw[ctl.part](); else renderFx(); persistSoon(); };
     const { row } = ctl.type === 'color' ? colorRow(ctl.label, () => ctl.get(style), update)
       : sliderRow(ctl.label, ctl.min, ctl.max, ctl.step, () => ctl.get(style), update);
     groups.get(ctl.group).appendChild(row);
@@ -888,13 +894,14 @@ for (const [name, p] of Object.entries(PRESETS)) {
 const styleSelect = document.getElementById('style');
 for (const [key, st] of Object.entries(GLOBE_STYLES)) styleSelect.add(new Option(st.name || key, key));
 styleSelect.onchange = e => applyStyle(e.target.value);
-document.getElementById('resetStyle').onclick = () => applyStyle(styleKey);
+document.getElementById('resetStyle').onclick = () => { delete saved.styles[styleKey]; applyStyle(styleKey, true); };
 document.getElementById('copyStyle').onclick = async () => {
   const text = `${styleKey}: ${JSON.stringify(style, (k, v) => k === '_stash' ? undefined : v, 2)},`;
   try { await navigator.clipboard.writeText(text); status('Style settings copied. Paste them to Claude to make them the default.'); }
   catch { document.getElementById('readout').textContent = text; status('Clipboard blocked; settings shown below.'); }
 };
-document.getElementById('outline').onchange = e => outlineEntities.forEach(en => en.show = e.target.checked);
+document.getElementById('outline').onchange = e => { outlineEntities.forEach(en => en.show = e.target.checked); persistSoon(); };
+document.getElementById('exportH').oninput = persistSoon;
 document.getElementById('guides').onchange = e => document.getElementById('safe').classList.toggle('on', e.target.checked);
 const aspectSelect = document.getElementById('aspect');
 function fitFrame() {
@@ -906,7 +913,7 @@ function fitFrame() {
   frame.style.width = fw + 'px';
   frame.style.height = fh + 'px';
 }
-aspectSelect.onchange = fitFrame;
+aspectSelect.onchange = () => { fitFrame(); persistSoon(); };
 window.addEventListener('resize', fitFrame);
 fitFrame();
 viewer.resize();
@@ -979,8 +986,45 @@ document.getElementById('kmlBtn').onclick = async () => {
 };
 
 window.app = { s, applyCamera, applyStyle, viewer, state: () => ({ dots: dotPrims?.length, landMask: !!landMask, lights: !!lightGrid }) };
+// Remember this browser's tweaks (per style), camera, frame and export settings, so a reload or a
+// new version of the page keeps them. Options added in later versions still get their defaults.
+const SAVE_KEY = 'california-globe-framer';
+let saved = {};
+try { saved = JSON.parse(localStorage.getItem(SAVE_KEY)) || {}; } catch {}
+saved.styles ||= {};
+let persistTimer;
+function persistSoon() {
+  clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    saved.styles[styleKey] = style;
+    Object.assign(saved, {
+      styleKey, camera: { ...s }, aspect: aspectSelect.value,
+      exportH: document.getElementById('exportH').value, outline: document.getElementById('outline').checked,
+    });
+    try { localStorage.setItem(SAVE_KEY, JSON.stringify(saved)); } catch {}
+  }, 300);
+}
+// Saved values win; anything the saved copy lacks comes from the current defaults
+function withDefaults(def, val) {
+  if (val === undefined) return structuredClone(def);
+  const plain = o => o && typeof o === 'object' && !Array.isArray(o);
+  if (!plain(def) || !plain(val)) return structuredClone(val);
+  const out = structuredClone(def);
+  for (const k of Object.keys(val)) out[k] = withDefaults(def[k], val[k]);
+  return out;
+}
+
+if (saved.camera) Object.assign(s, saved.camera);
+if (saved.aspect) { aspectSelect.value = saved.aspect; fitFrame(); }
+if (saved.exportH) document.getElementById('exportH').value = saved.exportH;
+if (saved.outline === false) document.getElementById('outline').checked = false;
+if (GLOBE_STYLES[saved.styleKey]) styleSelect.value = saved.styleKey;
+
 applyStyle(styleSelect.value); syncAll(); applyCamera();
-dataReady.then(() => { renderLines(); renderDots(); renderFills(); renderTextures(); }); // keeps any slider tweaks made while data loaded
+dataReady.then(() => {
+  renderLines(); renderDots(); renderFills(); renderTextures(); // keeps any slider tweaks made while data loaded
+  outlineEntities.forEach(en => en.show = document.getElementById('outline').checked);
+});
 new ResizeObserver(() => applyCamera()).observe(document.getElementById('frame'));
 </script>
 </body>
