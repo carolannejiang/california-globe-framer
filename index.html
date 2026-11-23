@@ -310,6 +310,7 @@ function gridLines(step) {
   const ready = !!(landMask && caMask);
   const key = step + (ready ? 'split' : '');
   if (gridCache[key]) return gridCache[key];
+  if (Object.keys(gridCache).length > 12) for (const k in gridCache) delete gridCache[k]; // spacing slider makes many
   const area = (lon, lat) => {
     if (!ready || lon < REGION.w || lon >= REGION.e || lat < REGION.s || lat >= REGION.n) return 'ocean';
     const i = Math.floor((REGION.n - lat) / REGION.res) * RW + Math.floor((lon - REGION.w) / REGION.res);
@@ -322,10 +323,15 @@ function gridLines(step) {
     return out;
   };
   const lines = [];
-  for (let lat = -80; lat <= 80; lat += step)
+  // Lines at whole multiples of the step, so the equator and prime meridian are always on the grid
+  for (let i = Math.ceil(-80 / step); i * step <= 80; i++) {
+    const lat = i * step;
     lines.push(samples(-180, 180, REGION.w, REGION.e, ready && lat >= REGION.s && lat < REGION.n).map(lon => [lon, lat]));
-  for (let lon = -180; lon < 180; lon += step)
+  }
+  for (let i = Math.ceil(-180 / step); i * step < 180; i++) {
+    const lon = i * step;
     lines.push(samples(-85, 85, REGION.s, REGION.n, ready && lon >= REGION.w && lon < REGION.e).map(lat => [lon, lat]));
+  }
   const out = { california: [], land: [], ocean: [] };
   for (const line of lines) {
     let run = [line[0]], a = area(...line[0]);
@@ -859,6 +865,10 @@ const CONTROLS = [
   { group: 'Linework', label: 'Outline glow', min: 0, max: 0.6, step: 0.01, get: st => st.outline.glow, set: (st, v) => st.outline.glow = v },
   { group: 'Linework', label: 'Borders', min: 0, max: 1, step: 0.01, show: has('borders'), part: 'lines', get: st => alphaOf(st.borders.color), set: (st, v) => st.borders.color = withAlpha(st.borders.color, v) },
   { group: 'Linework', label: 'Border width', min: 0.5, max: 4, step: 0.25, show: has('borders'), part: 'lines', get: st => st.borders.width, set: (st, v) => st.borders.width = v },
+  ...[0, 1, 2].map(i => ({ group: 'Linework', min: 0.5, max: 30, step: 0.5, part: 'lines',
+    label: st => [].concat(st.graticule).length > 1 ? `Grid ${i + 1} spacing °` : 'Grid spacing °',
+    show: st => !!st.graticule && st.showGrid && [].concat(st.graticule).length > i,
+    get: st => [].concat(st.graticule)[i].step, set: (st, v) => [].concat(st.graticule)[i].step = Math.max(0.1, v) })),
   { group: 'Linework', label: 'Grid strength', min: 0, max: 3, step: 0.05, show: st => !!st.graticule && st.showGrid, part: 'lines', get: st => st.gridOpacity ?? 1, set: (st, v) => st.gridOpacity = v },
   ...[['california', 'CA'], ['land', 'Land'], ['ocean', 'Ocean']].flatMap(([area, name]) => [
     { group: 'Linework', label: `${name} grid strength`, min: 0, max: 6, step: 0.05, show: st => !!st.graticule && st.showGrid, part: 'lines',
@@ -960,8 +970,9 @@ function buildStyleControls() {
       groups.set(ctl.group, d);
     }
     const update = v => { ctl.set(style, v); if (ctl.part) redraw[ctl.part](); else renderFx(); persistSoon(); };
-    const { row } = ctl.type === 'color' ? colorRow(ctl.label, () => ctl.get(style), update)
-      : sliderRow(ctl.label, ctl.min, ctl.max, ctl.step, () => ctl.get(style), update);
+    const label = typeof ctl.label === 'function' ? ctl.label(style) : ctl.label;
+    const { row } = ctl.type === 'color' ? colorRow(label, () => ctl.get(style), update)
+      : sliderRow(label, ctl.min, ctl.max, ctl.step, () => ctl.get(style), update);
     groups.get(ctl.group).appendChild(row);
   }
 }
