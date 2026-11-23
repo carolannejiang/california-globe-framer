@@ -27,7 +27,7 @@
   h1 { font-size:15px; margin:0 0 2px; }
   .hint { color:var(--muted); font-size:12px; margin:0 0 12px; }
   h2 { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:16px 0 6px; }
-  label.row { display:grid; grid-template-columns: 104px 1fr 44px; align-items:center; gap:8px; margin:4px 0; }
+  label.row { display:grid; grid-template-columns: 112px 1fr 40px; align-items:center; gap:8px; margin:4px 0; }
   details { border-top:1px solid var(--line); padding:4px 0; }
   details summary { cursor:pointer; font-size:12px; padding:4px 0; }
   label.row output { text-align:right; font-variant-numeric:tabular-nums; color:var(--muted); }
@@ -620,7 +620,7 @@ const CONTROLS = [
   { group: 'Dots', label: 'Dot brightness', min: 0.05, max: 1, step: 0.01, show: has('dots'), part: 'dots', get: st => st.dots.alpha, set: (st, v) => st.dots.alpha = v },
   { group: 'Dots', label: 'CA dot gap km', min: 5, max: 40, step: 1, show: has('dots'), part: 'dots', get: st => st.dots.spacing, set: (st, v) => st.dots.spacing = v },
   { group: 'Dots', label: 'Other gap km', min: 10, max: 60, step: 1, show: has('dots'), part: 'dots', get: st => st.dots.outsideSpacing ?? st.dots.spacing, set: (st, v) => st.dots.outsideSpacing = v },
-  { group: 'Dots', label: 'City boost', min: 0, max: 2, step: 0.05, show: has('dots'), part: 'dots', get: st => st.dots.lights, set: (st, v) => st.dots.lights = v },
+  { group: 'Dots', label: 'City size variation', min: 0, max: 5, step: 0.05, show: has('dots'), part: 'dots', get: st => st.dots.lights, set: (st, v) => st.dots.lights = v },
 
   { group: 'Horizon lines', label: 'Line count', min: 10, max: 300, step: 1, show: has('horizonLines'), get: st => st.horizonLines.count, set: (st, v) => st.horizonLines.count = v },
   { group: 'Horizon lines', label: 'Gap growth ×', min: 1, max: 200, step: 1, show: has('horizonLines'), get: st => st.horizonLines.growth ?? 10, set: (st, v) => st.horizonLines.growth = v },
