@@ -27,7 +27,8 @@
 // horizonLines  fine lines exactly parallel to the horizon, tightest at the horizon and widening outward
 //               in a strict geometric progression (each gap is a fixed multiple of the one before):
 //               { color, alpha, count (number of lines), extent (how far above the horizon the last line sits, in frame heights),
-//                 growth (last gap ÷ first gap, e.g. 10), overGlobe (0–1 strength over the globe vs. space) } or null
+//                 growth (last gap ÷ first gap, e.g. 10), overGlobe (0–1 strength over the globe vs. space),
+//                 glow (0–3 extra brightness at the horizon), glowHeight (how far up the glow fades out, in frame heights) } or null
 // shells      stepped translucent layers above the horizon, each with a hairline edge, like overlapping glass rings:
 //               { color, alpha (fill of the innermost layer; 0 = edges only), count, spacing (fraction of frame height), edge (hairline strength) } or null
 // pattern     faint interlaced-circle lattice over the whole frame: { color, alpha, scale (circles per frame height) } or null
@@ -133,7 +134,7 @@ window.GLOBE_STYLES = {
     outline: { color: 'rgba(240,242,255,1)', width: 2, glow: 0 },
     borders: { color: 'rgba(214,220,250,0.3)', width: 1 },
     dots: { color: '#cfd5f5', alpha: 0.5, size: 1.5, spacing: 11, outsideSpacing: 22, lights: 0.6 },
-    horizonLines: { color: '#dfe3fb', alpha: 0.5, count: 130, extent: 0.45, growth: 60, overGlobe: 0 },
+    horizonLines: { color: '#dfe3fb', alpha: 0.5, count: 130, extent: 0.45, growth: 60, glow: 1.2, glowHeight: 0.04, overGlobe: 0 },
     limb: { color: 'rgba(225,230,255,0.8)', width: 1 },
   },
 };

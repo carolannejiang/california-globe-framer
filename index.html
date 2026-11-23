@@ -312,6 +312,8 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
     uniform float lineRatio;   // each gap ÷ the previous gap
     uniform float lineFirst;   // first gap, in frame heights
     uniform float lineOverGlobe;
+    uniform float lineGlow;        // extra brightness near the horizon
+    uniform float lineGlowHeight;  // how far up the glow reaches, in frame heights
     uniform vec4 shellColor;
     uniform float shellCount;
     uniform float shellSpacing;
@@ -407,8 +409,11 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
           }
         }
         if (lineColor.a > 0.0) {
-          float a = horizonLines(hp) * lineColor.a * mix(lineOverGlobe, 1.0, self);
-          c.rgb = mix(c.rgb, lineColor.rgb, a);
+          // Glow: lines brighten toward the horizon, plus a soft haze of the line colour in the sky there
+          float glow = lineGlow * exp(-max(hp.y, 0.0) / lineGlowHeight) * step(0.0, hp.y);
+          float a = horizonLines(hp) * lineColor.a * (1.0 + 2.0 * glow) * mix(lineOverGlobe, 1.0, self);
+          c.rgb = mix(c.rgb, lineColor.rgb, clamp(a, 0.0, 1.0));
+          c.rgb += lineColor.rgb * glow * 0.35 * self;
         }
       }
       if (limbGlow > 0.0 && self > 0.0) {
@@ -447,7 +452,7 @@ const fx = scene.postProcessStages.add(new C.PostProcessStage({
     },
     limbColor: C.Color.WHITE, limbWidth: 0, limbGlow: 0, bgGradient: 0, bgTop: C.Color.BLACK,
     bgBottom: C.Color.BLACK, sheenColor: C.Color.TRANSPARENT, lineColor: C.Color.TRANSPARENT,
-    lineCount: 130, lineRatio: 1.02, lineFirst: 0.001, lineOverGlobe: 0, shellColor: C.Color.TRANSPARENT, shellCount: 0, shellSpacing: 0.05,
+    lineCount: 130, lineRatio: 1.02, lineFirst: 0.001, lineOverGlobe: 0, lineGlow: 0, lineGlowHeight: 0.05, shellColor: C.Color.TRANSPARENT, shellCount: 0, shellSpacing: 0.05,
     shellEdge: 0, patternColor: C.Color.TRANSPARENT, patternScale: 6, paper: 0, paperScale: 4, vignette: 0, grain: 0,
   },
 }));
@@ -494,6 +499,8 @@ function renderFx() {
   fx.uniforms.lineRatio = ratio;
   fx.uniforms.lineFirst = (hl?.extent ?? 0.5) * (ratio - 1) / (Math.pow(ratio, count) - 1);
   fx.uniforms.lineOverGlobe = hl?.overGlobe ?? 0;
+  fx.uniforms.lineGlow = hl?.glow ?? 0;
+  fx.uniforms.lineGlowHeight = hl?.glowHeight ?? 0.05;
   const sh = style.shells;
   fx.uniforms.shellCount = sh?.count ?? 0;
   fx.uniforms.shellColor = sh ? css(sh.color).withAlpha(sh.alpha) : C.Color.TRANSPARENT;
@@ -626,6 +633,8 @@ const CONTROLS = [
   { group: 'Horizon lines', label: 'Gap growth ×', min: 1, max: 200, step: 1, show: has('horizonLines'), get: st => st.horizonLines.growth ?? 10, set: (st, v) => st.horizonLines.growth = v },
   { group: 'Horizon lines', label: 'Field height', min: 0.05, max: 1, step: 0.01, show: has('horizonLines'), get: st => st.horizonLines.extent, set: (st, v) => st.horizonLines.extent = v },
   { group: 'Horizon lines', label: 'Line brightness', min: 0, max: 1, step: 0.01, show: has('horizonLines'), get: st => st.horizonLines.alpha, set: (st, v) => st.horizonLines.alpha = v },
+  { group: 'Horizon lines', label: 'Line glow', min: 0, max: 3, step: 0.05, show: has('horizonLines'), get: st => st.horizonLines.glow ?? 0, set: (st, v) => st.horizonLines.glow = v },
+  { group: 'Horizon lines', label: 'Glow height', min: 0.005, max: 0.3, step: 0.005, show: has('horizonLines'), get: st => st.horizonLines.glowHeight ?? 0.05, set: (st, v) => st.horizonLines.glowHeight = v },
 
   { group: 'Horizon layers', label: 'Layers', min: 0, max: 10, step: 1, show: has('shells'), get: st => st.shells.count, set: (st, v) => st.shells.count = v },
   { group: 'Horizon layers', label: 'Layer spacing', min: 0.01, max: 0.2, step: 0.005, show: has('shells'), get: st => st.shells.spacing, set: (st, v) => st.shells.spacing = v },
