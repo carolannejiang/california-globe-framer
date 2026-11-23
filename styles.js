@@ -11,6 +11,8 @@
 //   relief      0–1: faint grayscale terrain laid over the imagery, for texture on land
 // detail      map sharpness: 1 = normal, higher loads finer imagery tiles (slower), lower is softer
 // globeColor  colour of the globe surface under the imagery
+// fills       flat surface colours instead of globeColor: { ocean, land, california (hex colours),
+//               oceanTone, landTone, californiaTone (1 = as given, <1 darker, >1 lighter) } or null
 // background  colour of space, or [top, bottom] for a vertical gradient
 // stars, atmosphere (blue rim glow), groundHaze (atmospheric haze + fog on the surface)
 // atmosphereBrightness   -1 to 1, brightens or darkens the blue rim glow
@@ -42,6 +44,7 @@ window.DEFAULT_STYLE = {
   imagery: null,
   detail: 1,
   globeColor: '#000000',
+  fills: null,
   background: '#000000',
   stars: false,
   atmosphere: false,
@@ -133,6 +136,7 @@ window.GLOBE_STYLES = {
   halftone: {
     name: 'Halftone',
     globeColor: '#3a56a4',
+    fills: { ocean: '#3a56a4', land: '#3a56a4', california: '#3a56a4', oceanTone: 1, landTone: 1, californiaTone: 1 },
     background: ['#4867b6', '#3f5dab'],
     outline: { color: 'rgba(240,242,255,1)', width: 2, glow: 0 },
     borders: { color: 'rgba(214,220,250,0.3)', width: 1 },

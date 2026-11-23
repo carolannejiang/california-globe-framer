@@ -28,6 +28,7 @@
   .hint { color:var(--muted); font-size:12px; margin:0 0 12px; }
   h2 { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:16px 0 6px; }
   .row { display:grid; grid-template-columns: 100px 1fr 68px; align-items:center; gap:8px; margin:4px 0; }
+  .row input[type=color] { width:100%; height:24px; padding:0 2px; background:#26262a; border:1px solid #3a3a40; border-radius:5px; }
   .row input[type=number] { width:100%; padding:3px 5px; font-size:12px; text-align:right; font-variant-numeric:tabular-nums; }
   details { border-top:1px solid var(--line); padding:4px 0; }
   details summary { cursor:pointer; font-size:12px; padding:4px 0; }
@@ -190,6 +191,8 @@ const REGION = { w: -175, e: -45, s: 5, n: 80, res: 0.05 };
 const RW = Math.round((REGION.e - REGION.w) / REGION.res), RH = Math.round((REGION.n - REGION.s) / REGION.res);
 let landGeo, caPolys, landMask, caMask, lightGrid;
 
+const landPolys = () => landGeo.features.flatMap(f => f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates);
+
 // polys: list of polygons, each a list of [lon, lat] rings
 function rasterize(polys) {
   const cv = document.createElement('canvas');
@@ -231,7 +234,7 @@ async function setDots(spec) {
   if (dotPrims) scene.primitives.remove(dotPrims);
   dotPrims = null;
   if (!spec || !landGeo) return;
-  landMask ||= rasterize(landGeo.features.flatMap(f => f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates));
+  landMask ||= rasterize(landPolys());
   caMask ||= rasterize(caPolys);
   if (spec.lights > 0) lightGrid ||= await loadLights().catch(() => null);
   if (token !== dotToken) return; // style changed while loading
@@ -467,7 +470,7 @@ let styleKey;
 function applyStyle(key) {
   styleKey = key;
   style = structuredClone({ ...DEFAULT_STYLE, ...GLOBE_STYLES[key] });
-  renderFx(); renderLines(); renderDots();
+  renderFx(); renderLines(); renderDots(); renderFills();
   buildStyleControls();
   document.getElementById('gridToggle').style.display = style.graticule ? '' : 'none';
   document.getElementById('grid').checked = style.showGrid;
@@ -492,7 +495,7 @@ function renderFx() {
   scene.globe.maximumScreenSpaceError = 2 / (style.detail ?? 1);
   maskColor = css(style.mask.color);
 
-  scene.globe.baseColor = css(style.globeColor);
+  scene.globe.baseColor = style.fills ? tone(style.fills.ocean, style.fills.oceanTone) : css(style.globeColor);
   const bg = [].concat(style.background);
   scene.backgroundColor = css(bg[bg.length - 1]);
   fx.uniforms.bgGradient = bg.length > 1 ? 1 : 0;
@@ -558,6 +561,48 @@ function renderLines() {
 }
 function renderDots() { setDots(style.dots); }
 
+// Flat surface colours (style.fills): ocean is the globe's base colour; land and California are
+// painted into one transparent image draped over the dot region. tone: 1 = colour as given,
+// below 1 darkens toward black, above 1 lightens toward white.
+function tone(c, t = 1) {
+  const col = css(c);
+  return t <= 1 ? new C.Color(col.red * t, col.green * t, col.blue * t, 1) : C.Color.lerp(col, C.Color.WHITE, Math.min(1, t - 1), new C.Color());
+}
+const FILL_RES = 0.03; // degrees per pixel (~3 km)
+let fillLayer = null, fillToken = 0;
+async function renderFills() {
+  const token = ++fillToken;
+  const f = style.fills;
+  if (!f || !landGeo) {
+    if (fillLayer) viewer.imageryLayers.remove(fillLayer);
+    fillLayer = null;
+    return;
+  }
+  const W = Math.round((REGION.e - REGION.w) / FILL_RES), H = Math.round((REGION.n - REGION.s) / FILL_RES);
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+  const paint = (polys, color) => {
+    g.beginPath();
+    for (const poly of polys) for (const ring of poly) {
+      ring.forEach(([x, y], i) => g[i ? 'lineTo' : 'moveTo']((x - REGION.w) / FILL_RES, (REGION.n - y) / FILL_RES));
+      g.closePath();
+    }
+    g.fillStyle = color.toCssColorString();
+    g.fill('evenodd');
+  };
+  paint(landPolys(), tone(f.land, f.landTone));
+  paint(caPolys, tone(f.california, f.californiaTone));
+  const url = URL.createObjectURL(await new Promise(r => cv.toBlob(r)));
+  if (token !== fillToken) return URL.revokeObjectURL(url); // a newer redraw started
+  const layer = viewer.imageryLayers.addImageryProvider(new C.SingleTileImageryProvider({
+    url, tileWidth: W, tileHeight: H, rectangle: C.Rectangle.fromDegrees(REGION.w, REGION.s, REGION.e, REGION.n),
+  }));
+  const old = fillLayer;
+  fillLayer = layer;
+  if (old) setTimeout(() => viewer.imageryLayers.remove(old), 400); // swap after the new image is up, so it doesn't flash
+}
+
 function applyCamera() {
   camera.frustum.fov = rad(s.fov);
   camera.lookAt(C.Cartesian3.fromDegrees(s.lon, s.lat, 0), new C.HeadingPitchRange(rad(s.heading), rad(s.pitch), s.range * 1000));
@@ -606,6 +651,16 @@ function sliderRow(label, min, max, step, get, set) {
   return { row, sync };
 }
 
+function colorRow(label, get, set) {
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.innerHTML = `<span>${label}</span><input type="color" style="grid-column: span 2">`;
+  const input = row.querySelector('input');
+  input.value = get();
+  input.addEventListener('input', () => set(input.value));
+  return { row };
+}
+
 function slider(parent, key, label, min, max, step, onChange) {
   const { row, sync } = sliderRow(label, min, max, step, () => s[key], v => { s[key] = v; onChange(); });
   parent.appendChild(row);
@@ -634,6 +689,13 @@ const CONTROLS = [
   { group: 'Map', label: 'Imagery strength', min: 0, max: 1, step: 0.01, show: has('imagery'), get: st => st.imagery.alpha ?? 1, set: (st, v) => st.imagery.alpha = v },
   { group: 'Map', label: 'Terrain texture', min: 0, max: 0.6, step: 0.01, show: has('imagery'), get: st => st.imagery.relief ?? 0, set: (st, v) => st.imagery.relief = v },
   { group: 'Map', label: 'Map detail', min: 0.5, max: 3, step: 0.25, show: has('imagery'), get: st => st.detail ?? 1, set: (st, v) => st.detail = v },
+
+  { group: 'Surfaces', label: 'Ocean colour', type: 'color', show: has('fills'), get: st => st.fills.ocean, set: (st, v) => st.fills.ocean = v },
+  { group: 'Surfaces', label: 'Ocean tone', min: 0, max: 2, step: 0.01, show: has('fills'), get: st => st.fills.oceanTone ?? 1, set: (st, v) => st.fills.oceanTone = v },
+  { group: 'Surfaces', label: 'Land colour', type: 'color', show: has('fills'), part: 'fills', get: st => st.fills.land, set: (st, v) => st.fills.land = v },
+  { group: 'Surfaces', label: 'Land tone', min: 0, max: 2, step: 0.01, show: has('fills'), part: 'fills', get: st => st.fills.landTone ?? 1, set: (st, v) => st.fills.landTone = v },
+  { group: 'Surfaces', label: 'California colour', type: 'color', show: has('fills'), part: 'fills', get: st => st.fills.california, set: (st, v) => st.fills.california = v },
+  { group: 'Surfaces', label: 'California tone', min: 0, max: 2, step: 0.01, show: has('fills'), part: 'fills', get: st => st.fills.californiaTone ?? 1, set: (st, v) => st.fills.californiaTone = v },
 
   { group: 'Glow & atmosphere', label: 'City glow', min: 0, max: 4, step: 0.1, show: st => !!st.imagery || !!st.dots, get: st => st.bloom, set: (st, v) => st.bloom = v },
   { group: 'Glow & atmosphere', label: 'Atmosphere', min: -1, max: 1, step: 0.05, show: has('atmosphere'), get: st => st.atmosphereBrightness ?? 0, set: (st, v) => st.atmosphereBrightness = v },
@@ -677,7 +739,7 @@ const CONTROLS = [
 ];
 
 const debounced = (fn, ms) => { let t; return () => { clearTimeout(t); t = setTimeout(fn, ms); }; };
-const redraw = { lines: debounced(renderLines, 200), dots: debounced(renderDots, 250) };
+const redraw = { lines: debounced(renderLines, 200), dots: debounced(renderDots, 250), fills: debounced(renderFills, 250) };
 function buildStyleControls() {
   look.innerHTML = '';
   const groups = new Map();
@@ -690,10 +752,9 @@ function buildStyleControls() {
       look.appendChild(d);
       groups.set(ctl.group, d);
     }
-    const { row } = sliderRow(ctl.label, ctl.min, ctl.max, ctl.step, () => ctl.get(style), v => {
-      ctl.set(style, v);
-      if (ctl.part) redraw[ctl.part](); else renderFx();
-    });
+    const update = v => { ctl.set(style, v); if (ctl.part) redraw[ctl.part](); else renderFx(); };
+    const { row } = ctl.type === 'color' ? colorRow(ctl.label, () => ctl.get(style), update)
+      : sliderRow(ctl.label, ctl.min, ctl.max, ctl.step, () => ctl.get(style), update);
     groups.get(ctl.group).appendChild(row);
   }
 }
@@ -802,7 +863,7 @@ document.getElementById('kmlBtn').onclick = async () => {
 
 window.app = { s, applyCamera, applyStyle, viewer, state: () => ({ dots: dotPrims?.length, landMask: !!landMask, lights: !!lightGrid }) };
 applyStyle(styleSelect.value); syncAll(); applyCamera();
-dataReady.then(() => { renderLines(); renderDots(); }); // keeps any slider tweaks made while data loaded
+dataReady.then(() => { renderLines(); renderDots(); renderFills(); }); // keeps any slider tweaks made while data loaded
 new ResizeObserver(() => applyCamera()).observe(document.getElementById('frame'));
 </script>
 </body>
